@@ -1,0 +1,16 @@
+{
+  "name": "jogo-ping-pong",
+  "version": "1.0.0",
+  "description": "Tênis de mesa local para 2 jogadores na TV com controles de Xbox",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/",
+    "test:e2e": "node tests/e2e/run.mjs",
+    "build": "node build.mjs",
+    "serve": "python3 -m http.server 8080"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.0"
+  }
+}
