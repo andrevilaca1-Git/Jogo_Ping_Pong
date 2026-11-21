@@ -37,9 +37,21 @@ const NO_MENU = { up: false, down: false, left: false, right: false, confirm: fa
 
 function noop() {}
 
-// Estatísticas da partida (para HUD/testes): golpes por rally e motivos de ponto.
+// Estatísticas da partida (para HUD/testes): golpes por rally, motivos de ponto e distribuição
+// lateral (z) dos quiques na mesa durante os rallies.
 function newStats() {
-  return { points: 0, longestRally: 0, totalHits: 0, reasons: {} };
+  return {
+    points: 0, longestRally: 0, totalHits: 0, reasons: {},
+    bounces: 0, bounceZSum: 0, bounceZSqSum: 0, bounceZMaxAbs: 0
+  };
+}
+
+function recordBounceZ(stats, z) {
+  if (typeof z !== 'number' || z !== z) return;
+  stats.bounces += 1;
+  stats.bounceZSum += z;
+  stats.bounceZSqSum += z * z;
+  if (Math.abs(z) > stats.bounceZMaxAbs) stats.bounceZMaxAbs = Math.abs(z);
 }
 
 function other(p) { return p === 0 ? 1 : 0; }
@@ -335,6 +347,7 @@ function handleEvents(game, events) {
       playSound(game, 'bounce');
       pushEffect(game, { type: 'bounce', x: e.x, y: 0, z: e.z === undefined ? game.ball.z : e.z, t: game.time });
       if (game.bounceHint && game.bounceHint.side === e.side) game.bounceHint = null;
+      if (game.phase === 'rally') recordBounceZ(game.stats, e.z === undefined ? game.ball.z : e.z);
     } else if (e.type === 'net') {
       playSound(game, 'net');
       pushEffect(game, { type: 'net', x: 0, y: game.ball.y, z: game.ball.z, t: game.time });

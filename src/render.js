@@ -1284,6 +1284,14 @@ export function createRenderer(canvas, opts) {
   function drawTitle(game) {
     ctx.fillStyle = 'rgba(4,6,14,0.5)';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    // Escurece a faixa do logo: as placas "PING PONG TV / TÊNIS DE MESA" do fundo da cena
+    // apareciam atrás do título e poluíam a leitura.
+    const topShade = ctx.createLinearGradient(0, 0, 0, 290);
+    topShade.addColorStop(0, 'rgba(4,6,14,0.92)');
+    topShade.addColorStop(0.7, 'rgba(4,6,14,0.8)');
+    topShade.addColorStop(1, 'rgba(4,6,14,0)');
+    ctx.fillStyle = topShade;
+    ctx.fillRect(0, 0, VIEW_W, 290);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = font(140, '900');

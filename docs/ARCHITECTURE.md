@@ -204,3 +204,4 @@ a bola automaticamente quando ela está se aproximando (o jogador não precisa a
 - Projeção em perspectiva de uma câmera virtual (atrás/acima do lado de baixo). A bola é
   desenhada na posição 3D projetada **com sombra no tampo/chão** e uma **linha fina vertical**
   da sombra até a bola (leitura de altura). Marcador opcional do ponto de quique previsto.
+- `game.stats` (usado pelo e2e): `points, longestRally, totalHits, reasons{}, bounces, bounceZSum, bounceZSqSum, bounceZMaxAbs`.

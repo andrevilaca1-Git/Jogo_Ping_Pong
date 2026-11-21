@@ -39,8 +39,9 @@ export const AI_LEVELS = {
     replan: 0.12,
     smashChance: 0.4,
     smashMinY: 0.45,
-    lateralSpread: 0.5,
-    cornerChance: 0.12,
+    // v2: mira lateral em toda a largura útil (antes ±0.5 -> z ±0.27: quase tudo pelo centro)
+    lateralSpread: 1.0,
+    cornerChance: 0.25,
     depth: [-0.3, 0.4],
     mix: { topspin: 0.3, drive: 0.3, chop: 0.15, block: 0.25 },
     lowMix: { block: 0.35, chop: 0.35, drive: 0.3 },
@@ -51,15 +52,15 @@ export const AI_LEVELS = {
   hard: {
     reaction: 0.1,
     speed: 1.0,
-    errSigma: 0.03,       // v2: menos perfeita que na v1 (rallies CPU×CPU longos demais)
-    bigMissChance: 0.05,
+    errSigma: 0.045,      // v2: menos perfeita que na v1 (rallies CPU×CPU longos demais)
+    bigMissChance: 0.1,
     bigMiss: 0.17,
     replan: 0.06,
-    smashChance: 0.55,
-    smashMinY: 0.45,
-    lateralSpread: 0.6,
-    cornerChance: 0.4,    // às vezes busca os cantos (lateral ±0.8..1, fundo)
-    depth: [-0.2, 0.6],
+    smashChance: 0.7,     // v2: mais agressiva (ataca bola alta, cantos e fundo) em vez de
+    smashMinY: 0.35,      // só empurrar: rallies hard×hard ficavam longos demais
+    lateralSpread: 0.78,  // + cantos: a bola circula pela mesa toda
+    cornerChance: 0.6,    // às vezes busca os cantos (lateral ±0.8..1, fundo)
+    depth: [0.1, 0.8],
     mix: { topspin: 0.4, block: 0.2, chop: 0.15, drive: 0.25 },
     lowMix: { chop: 0.45, block: 0.35, topspin: 0.2 },
     serveTypes: ['drive', 'topspin', 'chop', 'topspin', 'smash'],
