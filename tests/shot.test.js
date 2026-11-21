@@ -106,20 +106,36 @@ test('contato fora do centro gera mais erros', () => {
   for (const type of ['drive', 'topspin', 'smash']) {
     const opts = type === 'smash' ? { yMin: 0.3, yMax: 0.65 } : {};
     const center = successRate(type, -1, { ...opts, s: 21 });
-    const edge = successRate(type, -1, { ...opts, offset: 0.95, s: 21 });
-    assert.ok(edge < center - 0.2, `${type}: centro ${center} borda ${edge}`);
+    const edge = successRate(type, -1, { ...opts, offset: 1.0, s: 21 });
+    assert.ok(edge < center - 0.03, `${type}: centro ${center} borda ${edge}`);
   }
 });
 
-test('qualidade cai com contato fora do centro, bola rápida e com muito spin', () => {
+// O jogo faz contato no 1º passo em que a bola entra em HIT_RADIUS (contato real a ~0.8–1.0×).
+for (const side of [-1, 1]) {
+  test(`contato a 0.9×HIT_RADIUS ainda é confiável (lado ${side})`, () => {
+    const goals = { block: 0.97, drive: 0.9, topspin: 0.9, chop: 0.9 };
+    for (const type of Object.keys(goals)) {
+      const rate = successRate(type, side, { offset: 0.9, s: 31 });
+      assert.ok(rate >= goals[type], `${type} a 0.9×: ${rate}`);
+    }
+    const smash = successRate('smash', side, { offset: 0.9, yMin: 0.3, yMax: 0.65, s: 31 });
+    assert.ok(smash >= 0.85, `smash a 0.9×: ${smash}`);
+  });
+}
+
+test('qualidade: ~1 até 0.7×HIT_RADIUS, >=0.75 na borda; cai com bola rápida/spin', () => {
   const ball = { x: -1.6, y: 0.2, vx: -5, vy: 0, spin: 0 };
-  const center = computeShot({ ball, paddle: { x: -1.6, y: 0.2 }, side: -1, shotType: 'drive', rng: seed(1) });
-  const edge = computeShot({ ball, paddle: { x: -1.6, y: 0.2 + HIT_RADIUS * 0.9 }, side: -1, shotType: 'drive', rng: seed(1) });
-  const fast = computeShot({ ball: { ...ball, vx: -13, spin: 150 }, paddle: { x: -1.6, y: 0.2 }, side: -1, shotType: 'drive', rng: seed(1) });
-  assert.equal(center.quality, 1);
-  assert.ok(edge.quality < 0.6);
-  assert.ok(fast.quality < 0.85);
-  assert.equal(center.type, 'drive');
+  const q = (frac, b = ball, type = 'drive') =>
+    computeShot({ ball: b, paddle: { x: -1.6, y: 0.2 + HIT_RADIUS * frac }, side: -1, shotType: type, rng: seed(1) }).quality;
+  assert.equal(q(0), 1);
+  assert.equal(q(0.7), 1);
+  assert.ok(q(0.9) < 1 && q(0.9) > 0.85, `0.9× ${q(0.9)}`);
+  assert.ok(Math.abs(q(1.0) - 0.75) < 0.01, `1.0× ${q(1.0)}`);
+  assert.ok(q(0, { ...ball, vx: -13, spin: 150 }) < 0.7, 'bola rápida com spin');
+  assert.ok(q(0, { ...ball, y: 0.05 }, 'smash') < 0.7, 'smash em bola baixa');
+  const c = computeShot({ ball, paddle: { x: -1.6, y: 0.2 }, side: -1, shotType: 'drive', rng: seed(1) });
+  assert.equal(c.type, 'drive');
 });
 
 test('velocidades e spins característicos de cada golpe', () => {
