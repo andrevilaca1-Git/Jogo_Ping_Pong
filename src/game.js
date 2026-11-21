@@ -250,6 +250,7 @@ function getInput(game, p, inputs, dt) {
     const r = updateAI(ai, {
       ball: game.ball,
       paddle: game.paddles[p],
+      opponent: game.paddles[1 - p],
       side: game.sides[p],
       phase: game.phase,
       isServer: game.server === p,

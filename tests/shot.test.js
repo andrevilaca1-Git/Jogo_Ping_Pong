@@ -63,7 +63,10 @@ function sphere(rng, r) {
 // lateral: valor fixo ou null (alterna -1, 0, 1). Retorna { rate, sideRate } onde sideRate é a
 // fração (entre os acertos com lateral != 0) que caiu no lado z pedido.
 function measure(shotType, side, opts = {}) {
-  const { n = 210, offset = 0, yMin = 0.03, yMax = 0.48, s = 1, lateral = null, zRange = 1.2, depthAim = true } = opts;
+  const {
+    n = 210, offset = 0, yMin = 0.03, yMax = 0.48, s = 1, lateral = null, zRange = 1.2, depthAim = true,
+    depth = null, vMin = 3, vMax = 8, spinMax = 50
+  } = opts;
   const rng = seed(s);
   let ok = 0;
   let sideOk = 0;
@@ -72,11 +75,12 @@ function measure(shotType, side, opts = {}) {
     const x = side * (1.2 + rng() * 0.8);
     const y = yMin + rng() * (yMax - yMin);
     const z = (rng() - 0.5) * 2 * zRange;
-    const ball = { x, y, z, vx: side * (3 + rng() * 5), vy: -1 + rng() * 2, vz: (rng() - 0.5) * 2, spin: (rng() - 0.5) * 100 };
+    const spin = (rng() < 0.5 ? -1 : 1) * rng() * spinMax;
+    const ball = { x, y, z, vx: side * (vMin + rng() * (vMax - vMin)), vy: -1 + rng() * 2, vz: (rng() - 0.5) * 2, spin };
     const o = sphere(rng, offset * HIT_RADIUS);
     const paddle = { x: x + o.dx, y: y + o.dy, z: z + o.dz, vx: 0, vy: 0, vz: 0 };
     const lat = lateral === null ? [-1, 0, 1][i % 3] : lateral;
-    const aim = { lateral: lat, depth: depthAim ? (rng() - 0.5) * 2 : 0 };
+    const aim = { lateral: lat, depth: depth !== null ? depth : (depthAim ? (rng() - 0.5) * 2 : 0) };
     const shot = computeShot({ ball, paddle, side, shotType, aim, rng });
     assert.equal(Math.sign(shot.vx), -side, 'bola volta na direção do oponente');
     const r = shotOutcome({ x, y, z, vx: shot.vx, vy: shot.vy, vz: shot.vz, spin: shot.spin }, side);
@@ -140,9 +144,17 @@ test('smash em bola baixa é arriscado', () => {
   assert.ok(low < high - 0.3);
 });
 
-test('contato fora do centro gera mais erros', () => {
+test('bola rápida e com muito spin gera mais erros que bola normal', () => {
+  for (const type of ['drive', 'topspin', 'chop']) {
+    const normal = successRate(type, -1, { offset: 0.9, s: 23 });
+    const hard = successRate(type, -1, { offset: 0.9, vMin: 10, vMax: 14, spinMax: 160, s: 23 });
+    assert.ok(hard < normal - 0.08, `${type}: normal ${normal} rápida ${hard}`);
+  }
+});
+
+test('contato fora do centro gera mais erros (em bola rápida/com spin)', () => {
   for (const type of ['drive', 'topspin', 'smash']) {
-    const opts = type === 'smash' ? { yMin: 0.3, yMax: 0.65 } : {};
+    const opts = type === 'smash' ? { yMin: 0.3, yMax: 0.65 } : { vMin: 8, vMax: 12, spinMax: 120 };
     const center = successRate(type, -1, { ...opts, s: 21 });
     const edge = successRate(type, -1, { ...opts, offset: 1.0, s: 21 });
     assert.ok(edge < center - 0.03, `${type}: centro ${center} borda ${edge}`);
@@ -160,6 +172,20 @@ for (const side of [-1, 1]) {
     }
     const smash = successRate('smash', side, { offset: 0.9, yMin: 0.3, yMax: 0.65, s: 31 });
     assert.ok(smash >= 0.85, `smash a 0.9×: ${smash}`);
+  });
+}
+
+// Bola recebida normal (<=8 m/s, spin <=60), contato a 0.9×HIT_RADIUS, mirando o canto fundo.
+for (const side of [-1, 1]) {
+  test(`mirando os cantos (lateral ±1, depth +1) cai na mesa em >=90% (lado ${side})`, () => {
+    for (const type of ['block', 'drive', 'topspin', 'chop']) {
+      for (const lat of [-1, 1]) {
+        for (const s of [51, 52]) {
+          const rate = successRate(type, side, { offset: 0.9, lateral: lat, depth: 1, spinMax: 60, vMax: 8, s });
+          assert.ok(rate >= 0.9, `${type} lateral ${lat} depth 1 (seed ${s}): ${rate}`);
+        }
+      }
+    }
   });
 }
 

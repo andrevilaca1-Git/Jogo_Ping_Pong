@@ -27,7 +27,7 @@ export var SERVE_PARAMS = {
 };
 
 var MIN_DEPTH = 0.35;
-var MAX_DEPTH = 1.25;
+var MAX_DEPTH = 1.1;  // alvo máximo + 0.05 (folga até a linha de fundo)
 var AIM_DEPTH = 0.3;          // quanto aim.depth muda a profundidade
 var AIM_LATERAL = 0.55;       // z do alvo de quique = aim.lateral * 0.55 (dentro da mesa)
 var SERVE_START_Z = 0.7;      // |z| máximo de onde o saque sai (para o 1º quique cair na mesa)
@@ -35,6 +35,8 @@ var PADDLE_POWER = 0.3;       // fração da velocidade da raquete que vira for�
 var PADDLE_POWER_MAX = 1.5;   // m/s
 var SWEET_SPOT = 0.7;         // fração de HIT_RADIUS sem penalidade de contato
 var EDGE_PENALTY = 0.25;      // perda de qualidade em 1.0*HIT_RADIUS (contato na borda)
+var CONTACT_ERR_WEIGHT = 0.65; // peso da perda por contato descentrado na dispersão (o erro vem
+                              // principalmente de bola rápida/com spin e smash em bola baixa)
 var SMASH_HIGH_Y = 0.25;      // abaixo disto o smash fica arriscado
 var DISPERSION_VY = 1.1;      // m/s por unidade de erro
 var DISPERSION_VX = 0.10;     // fração por unidade de erro
@@ -133,14 +135,18 @@ function solveVy(x, y, vx, spin, dir, target) {
 function contactQuality(ball, paddle, shotType, p) {
   var d = dist3(ball, paddle) / HIT_RADIUS;
   var off = clamp((d - SWEET_SPOT) / (1 - SWEET_SPOT), 0, 1.2);
-  var q = 1 - EDGE_PENALTY * Math.pow(off, 1.3);
+  var contactLoss = EDGE_PENALTY * Math.pow(off, 1.3);
+  var q = 1 - contactLoss;
   var bvz = ball.vz || 0;
   var inSpeed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy + bvz * bvz);
   if (inSpeed > 7) q -= (inSpeed - 7) * 0.04 / p.fastTol;
   var inSpin = Math.abs(ball.spin || 0);
   if (inSpin > 60) q -= (inSpin - 60) * 0.002 / p.fastTol;
   if (shotType === 'smash' && ball.y < SMASH_HIGH_Y) q -= (SMASH_HIGH_Y - ball.y) * 2.4;
-  return clamp(q, 0.05, 1);
+  q = clamp(q, 0.05, 1);
+  // erro usado na dispersão: perda total, com a parte do contato descentrado atenuada
+  var errLoss = (1 - q) - Math.min(contactLoss, 1 - q) * (1 - CONTACT_ERR_WEIGHT);
+  return { q: q, errLoss: errLoss };
 }
 
 export function computeShot(opts) {
@@ -160,7 +166,8 @@ export function computeShot(opts) {
   var vx = p.vx + power;
   var spin = p.spin;
 
-  var quality = contactQuality(ball, paddle, shotType, p);
+  var cq = contactQuality(ball, paddle, shotType, p);
+  var quality = cq.q;
 
   // Ajusta trajetória: tenta o alvo; se não passa a rede com folga, aprofunda o alvo e reduz vx.
   var clearTop = NET_H + BALL_R + p.margin;
@@ -187,7 +194,7 @@ export function computeShot(opts) {
   }
 
   // Dispersão proporcional a (1 - quality).
-  var err = (1 - quality) * p.err;
+  var err = cq.errLoss * p.err;
   var g1 = gauss(rng);
   var g2 = gauss(rng);
   var g3 = gauss(rng);
