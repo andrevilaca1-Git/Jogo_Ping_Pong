@@ -44,8 +44,8 @@ diretamente: abra o mesmo endereço da opção A.
 
 | Ação | Controle Xbox | Teclado J1 | Teclado J2 |
 |---|---|---|---|
-| Mover raquete | Analógico esquerdo / D-pad | W A S D | Setas |
-| Mirar (curta ↔ longa, alta) | Analógico direito | — | — |
+| Mover raquete sobre o plano da mesa (altura é automática) | Analógico esquerdo / D-pad | W A S D | Setas |
+| Direcionar a bola (esquerda/direita, curta/longa) | Analógico direito — ou o esquerdo no momento do golpe | — | — |
 | Drive (golpe normal) / sacar | **A** | F | K |
 | Topspin (rápido, efeito para frente) | **X** | G | L |
 | Corte / chop (lento, efeito para trás) | **B** | H | J |
@@ -53,9 +53,21 @@ diretamente: abra o mesmo endereço da opção A.
 | Bloqueio (seguro) | sem botão | — | — |
 | Pausa | **Menu** (☰) | Esc | P |
 
-Segure o botão do golpe **enquanto a bola chega** na raquete. O contato é automático:
-posicione a raquete onde a bola vai estar depois de quicar no seu lado.
+A câmera fica **acima da mesa, levemente inclinada**, com a mesa na vertical da tela: o Jogador 1
+começa **embaixo**. A **sombra** da bola na mesa e a linha que a liga à bola mostram a altura;
+um anel discreto marca onde a bola vai quicar (desligue em *Ajuda de quique* no menu).
+Segure o botão do golpe **enquanto a bola chega** na raquete. O contato e a altura da raquete são
+automáticos: basta posicionar a raquete onde a bola vai passar depois de quicar no seu lado.
 Dica: bola alta → smash; bola baixa e rápida → bloqueio ou topspin; para variar, corte.
+
+## Reduzir o atraso (delay) na TV
+O atraso geralmente **não vem do Bluetooth do controle** (~5–10 ms), e sim da **transmissão sem fio
+da tela** (espelhamento/Miracast/Chromecast adiciona 100–300 ms) e do processamento de imagem da TV.
+1. Ligue o computador na TV por **cabo HDMI** em vez de espelhar a tela sem fio.
+2. Na TV Samsung, ative o **Modo Jogo** (*Configurações → Geral → Gerenciador de dispositivos
+   externos → Modo Jogo* ou *Modo de baixa latência automático / ALLM*).
+3. Deixe o navegador em **tela cheia** (F11) e conecte os controles **no computador**
+   (Bluetooth ou cabo USB — o cabo tem a menor latência).
 
 ## Regras oficiais aplicadas (ITTF)
 - Game de **11 pontos**, com **2 de vantagem**; partida em **melhor de 3, 5 ou 7** games.
