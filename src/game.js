@@ -37,6 +37,11 @@ const NO_MENU = { up: false, down: false, left: false, right: false, confirm: fa
 
 function noop() {}
 
+// Estatísticas da partida (para HUD/testes): golpes por rally e motivos de ponto.
+function newStats() {
+  return { points: 0, longestRally: 0, totalHits: 0, reasons: {} };
+}
+
 function other(p) { return p === 0 ? 1 : 0; }
 
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
@@ -86,7 +91,7 @@ export function createGame(opts) {
     shake: 0,                 // intensidade da tremida de câmera
     effects: [],              // fila de efeitos visuais para o render consumir
     lastInputs: [emptyInput(), emptyInput()],
-    stats: { points: 0, longestRally: 0 }
+    stats: newStats()
   };
   if (o.autoplay) {
     startMatch(game, { mode: 'cpu-vs-cpu', bestOf: game.bestOf, difficulty: game.difficulty });
@@ -150,7 +155,7 @@ export function startMatch(game, opts) {
   game.lastGame = null;
   game.swapNotice = 0;
   game.effects.length = 0;
-  game.stats = { points: 0, longestRally: 0 };
+  game.stats = newStats();
   beginServe(game, true);
   return game;
 }
@@ -356,6 +361,8 @@ function endPoint(game, result) {
   if (game.rallyHits > game.stats.longestRally) game.stats.longestRally = game.rallyHits;
   if (!isLet) {
     game.stats.points += 1;
+    game.stats.totalHits += game.rallyHits;
+    game.stats.reasons[reason] = (game.stats.reasons[reason] || 0) + 1;
     game.pendingResult = awardPoint(game.match, result.winner);
     playSound(game, 'score');
     doRumble(game, result.winner, 0.35, 120);
