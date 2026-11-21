@@ -13,7 +13,7 @@ export var SHOT_PARAMS = {
   drive:   { vx: 7.0,  spin: 40,   depth: 0.95, margin: 0.05, minVx: 4.0, err: 1.0, fastTol: 1.0 },
   topspin: { vx: 8.0,  spin: 120,  depth: 1.00, margin: 0.06, minVx: 4.5, err: 0.85, fastTol: 1.1 },
   chop:    { vx: 4.5,  spin: -100, depth: 0.90, margin: 0.035, minVx: 3.0, err: 0.85, fastTol: 1.2 },
-  smash:   { vx: 12.5, spin: 25,   depth: 0.95, margin: 0.025, minVx: 10.0, err: 1.3, fastTol: 0.8 }
+  smash:   { vx: 12.5, spin: 25,   depth: 0.95, margin: 0.025, minVx: 9.0, err: 1.3, fastTol: 0.8 }
 };
 
 // Saque: velocidade horizontal, spin e profundidade do 2º quique.
@@ -32,10 +32,14 @@ var PADDLE_POWER = 0.3;       // fração da velocidade da raquete que vira for�
 var PADDLE_POWER_MAX = 1.5;   // m/s
 var SWEET_SPOT = 0.25;        // fração de HIT_RADIUS sem penalidade de contato
 var SMASH_HIGH_Y = 0.25;      // abaixo disto o smash fica arriscado
-var DISPERSION_VY = 1.7;      // m/s por unidade de erro
-var DISPERSION_VX = 0.14;     // fração por unidade de erro
+var DISPERSION_VY = 1.1;      // m/s por unidade de erro
+var DISPERSION_VX = 0.10;     // fração por unidade de erro
 var DISPERSION_SPIN = 30;     // rad/s por unidade de erro
 var SERVE_FAULT_CHANCE = 0.025;
+var SERVE_NET_MARGIN = 0.03;   // folga mínima do saque sobre a rede (m)
+var SERVE_ROBUST_DVY = 0.08;  // vizinhança de vy que também precisa ser válida
+var SERVE_MIN_Y = 0.15;       // altura mínima de saída (bola lançada)
+var SERVE_MAX_Y = 0.6;
 var SIM_DT = PHYSICS_DT;
 var SIM_MAX_T = 2.5;
 
@@ -172,23 +176,29 @@ export function computeShot(opts) {
   return { vx: outVx, vy: outVy, spin: outSpin, quality: quality, type: shotType };
 }
 
-// Simula um saque; retorna {valid, b1, b2, netY}.
+// Simula um saque; retorna {bounces, net, dead, netY}.
 function simulateServe(start, side) {
   var b = copyBall(start);
   var dir = -side;
   var bounces = [];
   var net = false;
+  var netY = -1;
   var t = 0;
   while (t < SIM_MAX_T && bounces.length < 2 && !b.dead) {
+    var px = b.x;
+    var py = b.y;
     var ev = stepBall(b, SIM_DT);
     t += SIM_DT;
+    if (netY < 0 && ((px < 0 && b.x >= 0) || (px > 0 && b.x <= 0))) {
+      netY = py + (b.y - py) * (px / (px - b.x));
+    }
     for (var i = 0; i < ev.length; i++) {
       if (ev[i].type === 'bounce') bounces.push(ev[i].x * dir);
       else if (ev[i].type === 'net') net = true;
       else if (ev[i].type === 'floor') b.dead = true;
     }
   }
-  return { bounces: bounces, net: net, dead: b.dead };
+  return { bounces: bounces, net: net, dead: b.dead, netY: netY };
 }
 
 // Distância (ao longo de dir) do 2º quique, com categorias monótonas para bisseção.
@@ -196,14 +206,37 @@ function serveMetric(x, y, vx, vy, spin, side) {
   var r = simulateServe({ x: x, y: y, vx: vx, vy: vy, spin: spin }, side);
   if (r.bounces.length === 0) return { d: r.dead ? -20 : 20, r: r };
   if (r.bounces[0] > 0) return { d: 20, r: r };          // 1º quique já no lado do recebedor
-  if (r.net) return { d: -5, r: r };
+  if (r.net || r.netY < NET_H + BALL_R + SERVE_NET_MARGIN) return { d: -5, r: r };
   if (r.bounces.length < 2) return { d: 20, r: r };      // passou do fundo depois do 1º quique
   return { d: r.bounces[1], r: r };
 }
 
+// Saque válido: 1º quique no lado do sacador, 2º no lado do recebedor, sem tocar a rede.
+// `r.bounces` são posições ao longo da direção do saque (negativo = lado do sacador).
 export function isValidServe(r) {
   return !r.net && r.bounces.length >= 2 && r.bounces[0] < 0 && r.bounces[1] > 0 &&
-    r.bounces[1] < TABLE_HALF && r.bounces[0] > -TABLE_HALF;
+    r.bounces[1] <= TABLE_HALF && r.bounces[0] >= -TABLE_HALF;
+}
+
+function serveScore(m, depth) {
+  if (!isValidServe(m.r) || m.r.netY < NET_H + BALL_R + SERVE_NET_MARGIN) return -1;
+  var b2 = m.r.bounces[1];
+  if (b2 > TABLE_HALF - 0.06 || m.r.bounces[0] > -0.1 || m.r.bounces[0] < -TABLE_HALF + 0.08) return -1;
+  var score = 1 / (1 + Math.abs(b2 - depth) * 10);
+  // prefere saques baixos (sem "balão")
+  if (m.r.netY > 0.4) score -= (m.r.netY - 0.4) * 0.5;
+  return score;
+}
+
+// Pontuação robusta: o pior caso entre vy e vizinhos (evita soluções na borda da mesa/rede).
+function robustServeScore(x, y, vx, vy, spin, side, depth) {
+  var s0 = serveScore(serveMetric(x, y, vx, vy, spin, side), depth);
+  if (s0 < 0) return s0;
+  var s1 = serveScore(serveMetric(x, y, vx, vy - SERVE_ROBUST_DVY, spin, side), depth);
+  if (s1 < 0) return s1;
+  var s2 = serveScore(serveMetric(x, y, vx, vy + SERVE_ROBUST_DVY, spin, side), depth);
+  if (s2 < 0) return s2;
+  return s0;
 }
 
 export function computeServe(opts) {
@@ -215,36 +248,40 @@ export function computeServe(opts) {
   var p = SERVE_PARAMS[type];
   var dir = -side;
 
-  // A bola sai da raquete, atrás da linha de fundo do sacador.
+  // A bola sai da raquete, atrás da linha de fundo do sacador (altura mínima = lançamento).
   var x = side * Math.max(Math.abs(paddle.x), TABLE_HALF + 0.04);
-  var y = clamp(paddle.y, 0.06, 0.6);
+  var y = clamp(paddle.y, SERVE_MIN_Y, SERVE_MAX_Y);
   var ax = clamp(aim.x || 0, -1, 1);
   var depth = clamp(p.depth + ax * dir * AIM_DEPTH, 0.4, 1.2);
   var spin = p.spin;
 
-  // Busca: para alguns vx candidatos, bisseção em vy; escolhe o primeiro válido com folga na rede.
-  var factors = [1, 0.9, 1.1, 0.8, 1.2, 0.7, 0.6, 1.35, 0.5];
-  var chosen = null;
-  var fallback = null;
-  for (var f = 0; f < factors.length && !chosen; f++) {
+  // Busca: para alguns vx candidatos, varredura em vy + refinamento local (a relação vy -> 2º
+  // quique não é monótona: há a janela "bola cortada para baixo" e a janela "balão").
+  var factors = [1, 0.85, 1.15, 0.7, 0.55];
+  var best = null;
+  var bestScore = -1;
+  for (var f = 0; f < factors.length; f++) {
     var vx = p.vx * factors[f] * dir;
-    var lo = -8;
-    var hi = 6;
-    for (var it = 0; it < 32; it++) {
-      var mid = (lo + hi) / 2;
-      var m = serveMetric(x, y, vx, mid, spin, side);
-      if (m.d < depth) lo = mid; else hi = mid;
-      if (isValidServe(m.r)) {
-        if (!fallback) fallback = { vx: vx, vy: mid };
-        if (Math.abs(m.d - depth) < 0.03) { chosen = { vx: vx, vy: mid }; break; }
+    var fBest = null;
+    var fScore = -1;
+    for (var vy = -6; vy <= 4.001; vy += 0.25) {
+      var sc = robustServeScore(x, y, vx, vy, spin, side, depth);
+      if (sc > fScore) { fScore = sc; fBest = vy; }
+    }
+    if (fBest === null) continue;
+    var step = 0.125;
+    for (var it = 0; it < 7; it++) {
+      for (var k = -1; k <= 1; k += 2) {
+        var cand = fBest + k * step;
+        var sc2 = robustServeScore(x, y, vx, cand, spin, side, depth);
+        if (sc2 > fScore) { fScore = sc2; fBest = cand; }
       }
+      step /= 2;
     }
-    if (!chosen) {
-      var mf = serveMetric(x, y, vx, (lo + hi) / 2, spin, side);
-      if (isValidServe(mf.r) && mf.r.bounces[1] < TABLE_HALF - 0.1) chosen = { vx: vx, vy: (lo + hi) / 2 };
-    }
+    if (fScore > bestScore) { bestScore = fScore; best = { vx: vx, vy: fBest }; }
+    if (bestScore > 0.7) break;
   }
-  if (!chosen) chosen = fallback || { vx: p.vx * dir, vy: -1.5 };
+  var chosen = best || { vx: p.vx * dir, vy: -1.0 };
 
   // Pequena variação natural e pequena chance de erro.
   var jitter = gauss(rng);

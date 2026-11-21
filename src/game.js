@@ -195,8 +195,9 @@ function holdBall(game) {
   const side = game.sides[game.server];
   const pad = game.paddles[game.server];
   const b = game.ball;
-  b.x = pad.x - side * 0.07;
-  b.y = pad.y + 0.06;
+  // Bola na mão livre, pequeno "quique" de preparação acima da raquete.
+  b.x = pad.x - side * 0.03;
+  b.y = pad.y + 0.09 + 0.05 * Math.abs(Math.sin(game.phaseTime * 3.2));
   b.vx = 0; b.vy = 0; b.spin = 0;
 }
 
@@ -330,6 +331,14 @@ function forceDecision(game) {
   // Fallback: o árbitro não decidiu — ponto do oponente de quem bateu por último.
   const hitter = game.lastHitter === null ? game.server : game.lastHitter;
   endPoint(game, { winner: other(hitter), reason: 'OUT' });
+}
+
+// Encerra o ponto atual com um resultado do árbitro ({winner, reason} ou {let:true}).
+// Exportado para testes/ferramentas; o fluxo normal chama via refereeEvent.
+export function resolvePoint(game, result) {
+  if (game.screen !== 'playing' || (game.phase !== 'rally' && game.phase !== 'serve')) return false;
+  endPoint(game, result);
+  return true;
 }
 
 function endPoint(game, result) {
@@ -649,5 +658,3 @@ export function updateGame(game, dt, inputs, menuInput) {
   return game;
 }
 
-// Status do placar para o render/HUD.
-export { getServer };
