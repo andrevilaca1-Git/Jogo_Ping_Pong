@@ -4,7 +4,7 @@ import { TABLE_HALF, PHYSICS_DT, FLOOR_Y, SIDE_LEFT, SIDE_RIGHT } from './consta
 import {
   createMatch, awardPoint, getServer, getSide, createRally, refereeEvent, REASON_TEXT
 } from './rules.js';
-import { createBall, stepBall, movePaddle } from './physics.js';
+import { createBall, stepBall, movePaddle, trackPaddleHeight, predictBall } from './physics.js';
 import { canHit, computeShot, computeServe } from './shot.js';
 import { createAI, updateAI } from './ai.js';
 
@@ -22,7 +22,7 @@ export const BEST_OF_OPTIONS = [3, 5, 7];
 export const DIFFICULTIES = ['easy', 'normal', 'hard'];
 export const DIFFICULTY_TEXT = { easy: 'Fácil', normal: 'Normal', hard: 'Difícil' };
 
-export const MENU_ITEMS = ['mode1p', 'mode2p', 'bestOf', 'difficulty', 'howto', 'play'];
+export const MENU_ITEMS = ['mode1p', 'mode2p', 'bestOf', 'difficulty', 'bounceHelp', 'howto', 'play'];
 export const PAUSE_ITEMS = ['resume', 'quit'];
 export const MATCH_OVER_ITEMS = ['again', 'menu'];
 
@@ -37,14 +37,54 @@ const NO_MENU = { up: false, down: false, left: false, right: false, confirm: fa
 
 function noop() {}
 
-// Estatísticas da partida (para HUD/testes): golpes por rally e motivos de ponto.
+// Estatísticas da partida (para HUD/testes): golpes por rally, motivos de ponto e distribuição
+// lateral (z) dos quiques na mesa durante os rallies.
 function newStats() {
-  return { points: 0, longestRally: 0, totalHits: 0, reasons: {} };
+  return {
+    points: 0, longestRally: 0, totalHits: 0, reasons: {},
+    bounces: 0, bounceZSum: 0, bounceZSqSum: 0, bounceZMaxAbs: 0
+  };
+}
+
+function recordBounceZ(stats, z) {
+  if (typeof z !== 'number' || z !== z) return;
+  stats.bounces += 1;
+  stats.bounceZSum += z;
+  stats.bounceZSqSum += z * z;
+  if (Math.abs(z) > stats.bounceZMaxAbs) stats.bounceZMaxAbs = Math.abs(z);
 }
 
 function other(p) { return p === 0 ? 1 : 0; }
 
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+// Altura da raquete do sacador enquanto segura a bola.
+const SERVER_PADDLE_Y = 0.14;
+// Limiar do stick direito para ele assumir a mira (senão usa o stick esquerdo).
+export const AIM_RS_THRESHOLD = 0.3;
+// Tempo máximo de previsão para a "ajuda de quique".
+const HINT_PREDICT_TIME = 2.2;
+
+// Converte o stick esquerdo (coordenadas de TELA) para movimento no MUNDO e aplica:
+// cima (moveY+) -> +x (para longe da câmera), direita (moveX+) -> +z. Igual para os dois lados.
+export function applyMove(paddle, side, inp, dt) {
+  movePaddle(paddle, side, inp.moveY || 0, inp.moveX || 0, dt);
+}
+
+// Mira do golpe: stick direito se |RS| > 0.3, senão o stick esquerdo.
+// depth > 0 = mais fundo (em direção ao oponente). Escreve em `out` (sem alocação).
+export function computeAim(inp, side, out) {
+  const o = out || { lateral: 0, depth: 0 };
+  const rx = inp.aimX || 0;
+  const ry = inp.aimY || 0;
+  let ax;
+  let ay;
+  if (rx * rx + ry * ry > AIM_RS_THRESHOLD * AIM_RS_THRESHOLD) { ax = rx; ay = ry; }
+  else { ax = inp.moveX || 0; ay = inp.moveY || 0; }
+  o.lateral = clamp(ax, -1, 1);
+  o.depth = clamp(ay * -side, -1, 1);
+  return o;
+}
 
 // ---------------------------------------------------------------------------
 // Criação
@@ -71,8 +111,11 @@ export function createGame(opts) {
     matchOverTime: 0,
     match: null,
     rally: null,
-    ball: createBall(0, 0.3),
-    paddles: [{ x: -1.75, y: 0.2, vx: 0, vy: 0 }, { x: 1.75, y: 0.2, vx: 0, vy: 0 }],
+    ball: createBall(0, 0.3, 0),
+    paddles: [
+      { x: -1.75, y: 0.25, z: 0, vx: 0, vy: 0, vz: 0 },
+      { x: 1.75, y: 0.25, z: 0, vx: 0, vy: 0, vz: 0 }
+    ],
     sides: [SIDE_LEFT, SIDE_RIGHT],
     ais: [null, null],
     names: ['Jogador 1', 'CPU'],
@@ -91,6 +134,9 @@ export function createGame(opts) {
     shake: 0,                 // intensidade da tremida de câmera
     effects: [],              // fila de efeitos visuais para o render consumir
     lastInputs: [emptyInput(), emptyInput()],
+    aims: [{ lateral: 0, depth: 0 }, { lateral: 0, depth: 0 }],
+    bounceHelp: o.bounceHelp === false ? false : true, // "Ajuda de quique" (menu)
+    bounceHint: null,         // { x, z, side, player, t } ponto de quique previsto do recebedor
     stats: newStats()
   };
   if (o.autoplay) {
@@ -166,9 +212,11 @@ function placePaddles(game) {
     const pad = game.paddles[p];
     const isServer = p === game.server;
     pad.x = side * (isServer ? 1.55 : 1.8);
-    pad.y = isServer ? 0.12 : 0.28;
+    pad.y = isServer ? SERVER_PADDLE_Y : 0.25;
+    pad.z = isServer ? -side * 0.15 : 0;
     pad.vx = 0;
     pad.vy = 0;
+    pad.vz = 0;
   }
 }
 
@@ -191,8 +239,9 @@ function beginServe(game, reposition) {
   game.sinceEvent = 0;
   game.rallyHits = 0;
   game.accumulator = 0;
+  game.bounceHint = null;
   const b = game.ball;
-  b.vx = 0; b.vy = 0; b.spin = 0; b.dead = false;
+  b.vx = 0; b.vy = 0; b.vz = 0; b.spin = 0; b.dead = false;
   holdBall(game);
 }
 
@@ -200,10 +249,11 @@ function holdBall(game) {
   const side = game.sides[game.server];
   const pad = game.paddles[game.server];
   const b = game.ball;
-  // Bola na mão livre, pequeno "quique" de preparação acima da raquete.
+  // Bola na mão livre (ao lado da raquete), pequeno "quique" de preparação.
   b.x = pad.x - side * 0.03;
   b.y = pad.y + 0.09 + 0.05 * Math.abs(Math.sin(game.phaseTime * 3.2));
-  b.vx = 0; b.vy = 0; b.spin = 0;
+  b.z = pad.z + side * 0.12;
+  b.vx = 0; b.vy = 0; b.vz = 0; b.spin = 0;
 }
 
 function getInput(game, p, inputs, dt) {
@@ -212,6 +262,7 @@ function getInput(game, p, inputs, dt) {
     const r = updateAI(ai, {
       ball: game.ball,
       paddle: game.paddles[p],
+      opponent: game.paddles[1 - p],
       side: game.sides[p],
       phase: game.phase,
       isServer: game.server === p,
@@ -231,10 +282,11 @@ function doServe(game, inp) {
   const shotType = inp.shotPressed || 'drive';
   const res = computeServe({
     side: side, paddle: pad, shotType: shotType,
-    aim: { x: inp.aimX || 0, y: inp.aimY || 0 }, rng: game.rng
+    aim: computeAim(inp, side, game.aims[p]), rng: game.rng
   });
   const b = game.ball;
-  b.x = res.x; b.y = res.y; b.vx = res.vx; b.vy = res.vy; b.spin = res.spin || 0;
+  b.x = res.x; b.y = res.y; b.z = res.z || 0;
+  b.vx = res.vx; b.vy = res.vy; b.vz = res.vz || 0; b.spin = res.spin || 0;
   b.dead = false;
   game.phase = 'rally';
   game.phaseTime = 0;
@@ -244,10 +296,39 @@ function doServe(game, inp) {
   game.sinceEvent = 0;
   game.rallyHits = 1;
   playSound(game, 'serve');
-  pushEffect(game, { type: 'hit', x: b.x, y: b.y, power: 0.3, player: p, shot: shotType, t: game.time });
+  pushEffect(game, { type: 'hit', x: b.x, y: b.y, z: b.z, power: 0.3, player: p, shot: shotType, t: game.time });
   doRumble(game, p, 0.25, 60);
-  const r = refereeEvent(game.rally, { type: 'hit', player: p, x: b.x, y: b.y });
+  updateBounceHint(game);
+  const r = refereeEvent(game.rally, { type: 'hit', player: p, x: b.x, y: b.y, z: b.z });
   if (r) endPoint(game, r);
+}
+
+// Prevê (predictBall) onde a bola vai quicar no lado de quem vai receber.
+export function updateBounceHint(game) {
+  game.bounceHint = null;
+  if (!game.bounceHelp || game.lastHitter === null) return null;
+  const hitter = game.lastHitter;
+  const recvSide = -game.sides[hitter];
+  let samples = null;
+  try { samples = predictBall(game.ball, HINT_PREDICT_TIME); } catch (e) { samples = null; }
+  if (!samples) return null;
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    const evs = s.events;
+    if (!evs) continue;
+    for (let k = 0; k < evs.length; k++) {
+      const e = evs[k];
+      if (e.type === 'floor') return null;
+      if (e.type === 'bounce' && e.side === recvSide) {
+        game.bounceHint = {
+          x: e.x, z: e.z === undefined ? (s.z || 0) : e.z, side: recvSide,
+          player: other(hitter), t: game.time + (s.t || 0)
+        };
+        return game.bounceHint;
+      }
+    }
+  }
+  return null;
 }
 
 function shotPower(type) {
@@ -264,12 +345,17 @@ function handleEvents(game, events) {
     const e = events[i];
     if (e.type === 'bounce') {
       playSound(game, 'bounce');
-      pushEffect(game, { type: 'bounce', x: e.x, y: 0, t: game.time });
+      pushEffect(game, { type: 'bounce', x: e.x, y: 0, z: e.z === undefined ? game.ball.z : e.z, t: game.time });
+      if (game.bounceHint && game.bounceHint.side === e.side) game.bounceHint = null;
+      if (game.phase === 'rally') recordBounceZ(game.stats, e.z === undefined ? game.ball.z : e.z);
     } else if (e.type === 'net') {
       playSound(game, 'net');
-      pushEffect(game, { type: 'net', x: 0, y: game.ball.y, t: game.time });
+      pushEffect(game, { type: 'net', x: 0, y: game.ball.y, z: game.ball.z, t: game.time });
+      game.bounceHint = null;
+      if (game.phase === 'rally' && game.lastHitter !== null) updateBounceHint(game);
     } else if (e.type === 'floor') {
-      pushEffect(game, { type: 'floor', x: e.x, y: FLOOR_Y, t: game.time });
+      pushEffect(game, { type: 'floor', x: e.x, y: FLOOR_Y, z: e.z === undefined ? game.ball.z : e.z, t: game.time });
+      game.bounceHint = null;
     }
     if (game.phase === 'rally') {
       game.sinceEvent = 0;
@@ -291,12 +377,13 @@ function tryHits(game, frameInputs) {
     const pad = game.paddles[p];
     if (!canHit(b, pad, side)) continue;
     const inp = frameInputs[p];
-    const shotType = inp.shot || 'block';
+    // Botão segurado ou apertado neste frame (menor latência percebida).
+    const shotType = inp.shot || inp.shotPressed || 'block';
     const res = computeShot({
       ball: b, paddle: pad, side: side, shotType: shotType,
-      aim: { x: inp.aimX || 0, y: inp.aimY || 0 }, rng: game.rng
+      aim: computeAim(inp, side, game.aims[p]), rng: game.rng
     });
-    b.vx = res.vx; b.vy = res.vy; b.spin = res.spin || 0;
+    b.vx = res.vx; b.vy = res.vy; b.vz = res.vz || 0; b.spin = res.spin || 0;
     game.cooldown[p] = HIT_COOLDOWN;
     game.lastHitter = p;
     game.lastShot = res.type || shotType;
@@ -305,13 +392,14 @@ function tryHits(game, frameInputs) {
     const power = shotPower(shotType);
     playSound(game, 'hit', { power: power });
     pushEffect(game, {
-      type: 'hit', x: b.x, y: b.y, power: power, player: p, shot: shotType,
+      type: 'hit', x: b.x, y: b.y, z: b.z, power: power, player: p, shot: shotType,
       quality: res.quality, t: game.time
     });
+    updateBounceHint(game);
     doRumble(game, p, 0.2 + 0.6 * power, shotType === 'smash' ? 140 : 70);
     if (shotType === 'smash') game.shake = Math.max(game.shake, 1);
     if (game.phase === 'rally') {
-      const r = refereeEvent(game.rally, { type: 'hit', player: p, x: b.x, y: b.y });
+      const r = refereeEvent(game.rally, { type: 'hit', player: p, x: b.x, y: b.y, z: b.z });
       if (r) {
         endPoint(game, r);
         return true;
@@ -322,13 +410,16 @@ function tryHits(game, frameInputs) {
 }
 
 function outOfWorld(b) {
-  return b.x < -6 || b.x > 6 || b.y > 8 || b.y < FLOOR_Y - 0.5 ||
-    b.x !== b.x || b.y !== b.y; // NaN
+  const z = b.z || 0;
+  return b.x < -6 || b.x > 6 || z < -6 || z > 6 || b.y > 8 || b.y < FLOOR_Y - 0.5 ||
+    b.x !== b.x || b.y !== b.y || z !== z; // NaN
 }
 
 function forceDecision(game) {
   const b = game.ball;
-  const r = refereeEvent(game.rally, { type: 'floor', x: b.x === b.x ? b.x : 0 });
+  const r = refereeEvent(game.rally, {
+    type: 'floor', x: b.x === b.x ? b.x : 0, z: b.z === b.z ? (b.z || 0) : 0
+  });
   if (r) {
     endPoint(game, r);
     return;
@@ -349,6 +440,7 @@ export function resolvePoint(game, result) {
 function endPoint(game, result) {
   game.phase = 'pointOver';
   game.phaseTime = 0;
+  game.bounceHint = null;
   const isLet = !!result.let;
   const reason = result.reason || (isLet ? 'LET' : 'OUT');
   game.lastPoint = {
@@ -373,12 +465,13 @@ function endPoint(game, result) {
 
 function physicsStep(game, frameInputs) {
   const dt = PHYSICS_DT;
+  const b = game.ball;
   for (let p = 0; p < 2; p++) {
-    const inp = frameInputs[p];
-    movePaddle(game.paddles[p], game.sides[p], inp.moveX || 0, inp.moveY || 0, dt);
+    const pad = game.paddles[p];
+    applyMove(pad, game.sides[p], frameInputs[p], dt);
+    trackPaddleHeight(pad, b, game.sides[p], dt);
     if (game.cooldown[p] > 0) game.cooldown[p] -= dt;
   }
-  const b = game.ball;
   if (game.phase === 'rally') {
     if (tryHits(game, frameInputs)) return;
   }
@@ -426,11 +519,17 @@ function updatePlaying(game, dt, inputs) {
       const inp = frameInputs[p];
       const pad = game.paddles[p];
       const side = game.sides[p];
-      movePaddle(pad, side, inp.moveX || 0, inp.moveY || 0, dt);
+      applyMove(pad, side, inp, dt);
       if (p === srv) {
-        // Sacador fica atrás da linha de fundo, com a raquete acima do tampo.
-        if (pad.x * side < TABLE_HALF + 0.06) pad.x = side * (TABLE_HALF + 0.06);
-        pad.y = clamp(pad.y, 0.02, 0.6);
+        // Sacador fica atrás da linha de fundo, raquete em altura fixa acima do tampo.
+        if (pad.x * side < TABLE_HALF + 0.06) {
+          pad.x = side * (TABLE_HALF + 0.06);
+          if (pad.vx * side < 0) pad.vx = 0;
+        }
+        pad.y = SERVER_PADDLE_Y;
+        pad.vy = 0;
+      } else {
+        trackPaddleHeight(pad, game.ball, side, dt);
       }
     }
     holdBall(game);
@@ -447,8 +546,7 @@ function updatePlaying(game, dt, inputs) {
 
   if (game.phase === 'gameOver') {
     for (let p = 0; p < 2; p++) {
-      const inp = frameInputs[p];
-      movePaddle(game.paddles[p], game.sides[p], inp.moveX || 0, inp.moveY || 0, dt);
+      applyMove(game.paddles[p], game.sides[p], frameInputs[p], dt);
     }
     if (game.phaseTime >= GAME_OVER_TIME) {
       if (game.match.over) {
@@ -520,6 +618,9 @@ export function getMenuItems(game) {
       label = 'Dificuldade CPU'; value = DIFFICULTY_TEXT[game.difficulty] || game.difficulty;
       adjustable = true;
     }
+    else if (id === 'bounceHelp') {
+      label = 'Ajuda de quique'; value = game.bounceHelp ? 'Sim' : 'Não'; adjustable = true;
+    }
     else if (id === 'howto') label = 'Como jogar';
     else if (id === 'play') label = 'Jogar';
     items.push({
@@ -550,6 +651,7 @@ function updateTitle(game, menu) {
   if (dir !== 0) {
     if (id === 'bestOf') { game.bestOf = cycle(BEST_OF_OPTIONS, game.bestOf, dir); playSound(game, 'menu'); }
     else if (id === 'difficulty') { game.difficulty = cycle(DIFFICULTIES, game.difficulty, dir); playSound(game, 'menu'); }
+    else if (id === 'bounceHelp') { game.bounceHelp = !game.bounceHelp; playSound(game, 'menu'); }
     else if (id === 'mode1p' || id === 'mode2p') {
       game.mode = game.mode === '1p' ? '2p' : '1p';
       playSound(game, 'menu');
@@ -561,6 +663,7 @@ function updateTitle(game, menu) {
     else if (id === 'mode2p') { game.mode = '2p'; m.index = MENU_ITEMS.indexOf('play'); }
     else if (id === 'bestOf') game.bestOf = cycle(BEST_OF_OPTIONS, game.bestOf, 1);
     else if (id === 'difficulty') game.difficulty = cycle(DIFFICULTIES, game.difficulty, 1);
+    else if (id === 'bounceHelp') game.bounceHelp = !game.bounceHelp;
     else if (id === 'howto') m.view = 'howto';
     else if (id === 'play') {
       if (game.mode !== '1p' && game.mode !== '2p') game.mode = '1p';

@@ -149,3 +149,59 @@ export function updateGame(game, dt, inputs /* [PlayerInput, PlayerInput] */, me
   com cooldown; eventos de física e `hit` vão para `refereeEvent`.
 - `main.js`: cria canvas 1920x1080 escalado para a tela, loop `requestAnimationFrame`,
   expõe `window.__pingpong = { game, input }` para testes e2e.
+
+---
+
+# v2 — Visão superior 3D (substitui a visão lateral)
+
+Motivo: na visão lateral era difícil saber a altura da bola. Agora a física é **3D** e a
+câmera fica **acima e atrás da mesa, inclinada (~55–65° em relação ao chão)**, com a mesa
+na **vertical** da tela: o lado `side=-1` fica **embaixo** (perto da câmera) e `side=+1` **em cima**.
+
+## Coordenadas 3D
+- `x`: comprimento da mesa (`[-1.37, 1.37]`), rede em x=0. **Na tela, +x = para cima.**
+- `z`: largura da mesa (`[-TABLE_W_HALF, +TABLE_W_HALF]`). **Na tela, +z = para a direita.**
+- `y`: altura acima do tampo (como antes).
+- Bola: `{ x, y, z, vx, vy, vz, spin }`. Raquete: `{ x, y, z, vx, vy, vz }`.
+- A rede cobre `|z| <= NET_W_HALF`. Bola que passa por fora dos postes não toca a rede.
+
+## Altura da raquete é AUTOMÁTICA
+O jogador só controla a raquete no plano da mesa (x e z). A altura `y` da raquete acompanha
+a bola automaticamente quando ela está se aproximando (o jogador não precisa adivinhar altura).
+
+## Controles (coordenadas de tela, iguais para os dois jogadores)
+- Stick esquerdo: `moveY` (cima) → mundo **+x**; `moveX` (direita) → mundo **+z**.
+- Mira do golpe (no contato): stick direito se `|RS| > 0.3`, senão o stick esquerdo.
+  `aim = { lateral: aimX (−1..1, +z), depth: aimY * -side (−1..1, +1 = mais fundo) }`.
+
+## Mudanças de API
+### physics.js
+- `createBall(x=0, y=0.3, z=0)` → inclui `z, vz`.
+- `stepBall(ball, dt)` integra z também. Eventos:
+  - `{ type:'bounce', side, x, z }` só se `|x|<=TABLE_HALF && |z|<=TABLE_W_HALF` (senão a bola passa ao lado e cai).
+  - `{ type:'net', clip }` só se `|z| <= NET_W_HALF` no cruzamento de x=0.
+  - `{ type:'floor', x, z }`.
+- `predictBall` amostras incluem `z, vz`.
+- `clampPaddle(paddle, side)` limita x (zona espelhada), z (`zMin..zMax`) e y.
+- `movePaddle(paddle, side, moveX, moveZ, dt)` — **agora em coordenadas de MUNDO** (x e z), aceleração suave, não mexe em y.
+- **Novo** `trackPaddleHeight(paddle, ball, side, dt)`: suaviza `paddle.y` em direção a
+  `ball.y` (limitado à zona) quando a bola vem em direção ao lado (`ball.vx*side>0`) ou está parada;
+  caso contrário volta suavemente para altura de espera ~0.25.
+### shot.js
+- `canHit(ball, paddle, side)`: distância **3D** `<= HIT_RADIUS` e bola vindo em direção ao lado.
+- `computeShot({ ball, paddle, side, shotType, aim:{lateral, depth}, rng })` → `{ vx, vy, vz, spin, quality, type }`.
+  Alvo de quique: x conforme profundidade (como antes) e `z = lateral * 0.55` (dentro da mesa);
+  vz = (zAlvo - ball.z) / tempoAteQuique. Dispersão também em vz. Golpes bem centrados caem dentro da mesa (≥95%).
+- `computeServe({ side, paddle, shotType, aim:{lateral, depth}, rng })` → `{x,y,z,vx,vy,vz,spin}`; o saque pode ir
+  para qualquer lado (singles), z do alvo por `aim.lateral`; válido ≥95%.
+### rules.js
+- Evento `hit` passa a ter `z`. Voleio é **OBSTRUCTION** só se a bola estiver sobre o tampo
+  (`|x|<=TABLE_HALF && |z|<=TABLE_W_HALF`); fora disso, a bola do oponente era fora → ponto de quem rebateu (`OUT`).
+### ai.js
+- Move-se em x **e z**; produz `PlayerInput` em coordenadas de TELA (moveY → +x mundo, moveX → +z mundo),
+  e `aimX/aimY` para variar a direção (lateral) dos golpes.
+### render.js
+- Projeção em perspectiva de uma câmera virtual (atrás/acima do lado de baixo). A bola é
+  desenhada na posição 3D projetada **com sombra no tampo/chão** e uma **linha fina vertical**
+  da sombra até a bola (leitura de altura). Marcador opcional do ponto de quique previsto.
+- `game.stats` (usado pelo e2e): `points, longestRally, totalHits, reasons{}, bounces, bounceZSum, bounceZSqSum, bounceZMaxAbs`.

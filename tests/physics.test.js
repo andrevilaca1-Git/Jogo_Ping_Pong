@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createBall, stepBall, predictBall, clampPaddle, movePaddle
+  createBall, stepBall, predictBall, clampPaddle, movePaddle, trackPaddleHeight, PADDLE_WAIT_Y
 } from '../src/physics.js';
 import {
-  TABLE_HALF, NET_H, BALL_R, TABLE_RESTITUTION, FLOOR_Y, PHYSICS_DT,
+  TABLE_HALF, TABLE_W_HALF, NET_W_HALF, NET_H, BALL_R, TABLE_RESTITUTION, FLOOR_Y, PHYSICS_DT,
   PADDLE_MAX_SPEED, PADDLE_ZONE
 } from '../src/constants.js';
 
@@ -26,10 +26,11 @@ function runUntil(ball, type, maxT = 3, dt = DT) {
 }
 
 test('createBall usa valores padrão', () => {
-  assert.deepEqual(createBall(), { x: 0, y: 0.3, vx: 0, vy: 0, spin: 0 });
-  const b = createBall(-1, 0.5);
+  assert.deepEqual(createBall(), { x: 0, y: 0.3, z: 0, vx: 0, vy: 0, vz: 0, spin: 0 });
+  const b = createBall(-1, 0.5, 0.2);
   assert.equal(b.x, -1);
   assert.equal(b.y, 0.5);
+  assert.equal(b.z, 0.2);
 });
 
 test('bola quica na mesa com evento e lado corretos', () => {
@@ -176,8 +177,69 @@ test('Magnus: topspin cai antes que backspin', () => {
   assert.ok(xFlat < xBack - 0.05, `flat ${xFlat} back ${xBack}`);
 });
 
+test('3D: z integra com arrasto e eventos têm z', () => {
+  const b = { x: -0.6, y: 0.3, z: 0.1, vx: 0, vy: 0, vz: 0.5, spin: 0 };
+  const r = runUntil(b, 'bounce');
+  assert.ok(r.event);
+  assert.ok(r.event.z > 0.1 && r.event.z < 0.1 + 0.5 * r.t + 1e-9, `z ${r.event.z}`);
+  assert.ok(Math.abs(b.z - r.event.z) < 0.01);
+  const f = { x: -1.8, y: 0.3, z: -0.2, vx: -1, vy: 0, vz: -0.4, spin: 0 };
+  const rf = runUntil(f, 'floor');
+  assert.ok(rf.event.z < -0.2);
+  assert.equal(f.vz, 0);
+});
+
+test('3D: quique fora da largura da mesa não gera bounce e a bola cai no chão', () => {
+  for (const z of [TABLE_W_HALF + 0.02, -(TABLE_W_HALF + 0.05), 1.2]) {
+    const b = { x: 0.6, y: 0.3, z, vx: 0, vy: 0, vz: 0, spin: 0 };
+    const r = runUntil(b, 'floor');
+    assert.ok(r.event, `z=${z}: deve cair no chão`);
+    assert.ok(!r.all.some((e) => e.type === 'bounce'), `z=${z}: sem quique`);
+    assert.ok(Math.abs(r.event.z - z) < 1e-9);
+  }
+  // bola que sai pela lateral durante o voo
+  const s = { x: -0.8, y: 0.3, z: 0.5, vx: 2, vy: 0, vz: 3, spin: 0 };
+  const rs = runUntil(s, 'floor');
+  assert.ok(!rs.all.some((e) => e.type === 'bounce'));
+  assert.ok(rs.event.z > TABLE_W_HALF);
+  // na borda exata ainda quica
+  const e = { x: 0.6, y: 0.3, z: TABLE_W_HALF - 0.001, vx: 0, vy: 0, vz: 0, spin: 0 };
+  assert.ok(runUntil(e, 'bounce').event);
+});
+
+test('3D: bola que passa ao lado da rede (|z| > NET_W_HALF) não gera evento net', () => {
+  for (const z of [NET_W_HALF + 0.03, -(NET_W_HALF + 0.1)]) {
+    const b = { x: -0.3, y: 0.08, z, vx: 6, vy: 0, vz: 0, spin: 0 };
+    const r = runUntil(b, 'floor', 2);
+    assert.ok(!r.all.some((e) => e.type === 'net'), `z=${z}`);
+    assert.ok(r.event.x > 0, 'passou para o outro lado');
+  }
+  // dentro dos postes (mas fora da mesa) bate na rede
+  const c = { x: -0.3, y: 0.08, z: NET_W_HALF - 0.05, vx: 6, vy: 0, vz: 0, spin: 0 };
+  const rc = runUntil(c, 'net', 0.5);
+  assert.ok(rc.event);
+  assert.equal(rc.event.clip, false);
+  // cruzamento oblíquo: z no instante do cruzamento é o que conta
+  const o = { x: -0.3, y: 0.08, z: 0.6, vx: 6, vy: 0, vz: 8, spin: 0 };
+  const ro = runUntil(o, 'floor', 2);
+  assert.ok(!ro.all.some((e) => e.type === 'net'), 'cruza x=0 em z≈1.0');
+});
+
+test('3D: bounce com topspin acelera ao longo da direção horizontal', () => {
+  const b = { x: -0.8, y: 0.1, z: 0, vx: 3, vy: -1, vz: 3, spin: 100 };
+  let before = null;
+  let t = 0;
+  while (t < 1) {
+    before = { vx: b.vx, vz: b.vz };
+    const ev = stepBall(b, DT); t += DT;
+    if (ev.some((e) => e.type === 'bounce')) break;
+  }
+  assert.ok(Math.hypot(b.vx, b.vz) > Math.hypot(before.vx, before.vz) + 0.1);
+  assert.ok(Math.abs(b.vx / b.vz - before.vx / before.vz) < 1e-6, 'mantém a direção');
+});
+
 test('predictBall não muta a bola original e retorna amostras', () => {
-  const b = { x: -1.2, y: 0.3, vx: 5, vy: 1, spin: 50 };
+  const b = { x: -1.2, y: 0.3, z: 0.2, vx: 5, vy: 1, vz: -0.3, spin: 50 };
   const snap = { ...b };
   const samples = predictBall(b, 1.0);
   assert.deepEqual(b, snap);
@@ -195,6 +257,8 @@ test('predictBall não muta a bola original e retorna amostras', () => {
   }
   const pe = bounce.events.find((e) => e.type === 'bounce');
   assert.ok(Math.abs(pe.x - hit.x) < 1e-9);
+  assert.ok(Math.abs(pe.z - hit.z) < 1e-9);
+  assert.ok('z' in samples[0] && 'vz' in samples[0]);
 });
 
 test('predictBall para quando a bola morre no chão', () => {
@@ -204,45 +268,100 @@ test('predictBall para quando a bola morre no chão', () => {
   assert.ok(s[s.length - 1].events.some((e) => e.type === 'floor'));
 });
 
-test('clampPaddle: zona do lado esquerdo e espelhada para o direito', () => {
-  const p = clampPaddle({ x: 0, y: 5, vx: 1, vy: 1 }, -1);
+test('clampPaddle: zona do lado esquerdo e espelhada para o direito (x, y e z)', () => {
+  const p = clampPaddle({ x: 0, y: 5, z: 9, vx: 1, vy: 1, vz: 1 }, -1);
   assert.equal(p.x, PADDLE_ZONE.xMax);
   assert.equal(p.y, PADDLE_ZONE.yMax);
-  const q = clampPaddle({ x: -10, y: -5, vx: -1, vy: -1 }, -1);
+  assert.equal(p.z, PADDLE_ZONE.zMax);
+  assert.equal(p.vz, 0);
+  const q = clampPaddle({ x: -10, y: -5, z: -9, vx: -1, vy: -1, vz: -1 }, -1);
   assert.equal(q.x, PADDLE_ZONE.xMin);
   assert.equal(q.y, PADDLE_ZONE.yMin);
+  assert.equal(q.z, PADDLE_ZONE.zMin);
   assert.equal(q.vx, 0);
+  assert.equal(q.vz, 0);
 
-  const r = clampPaddle({ x: 0, y: 0.2, vx: 0, vy: 0 }, 1);
+  const r = clampPaddle({ x: 0, y: 0.2, z: 0, vx: 0, vy: 0, vz: 0 }, 1);
   assert.equal(r.x, -PADDLE_ZONE.xMax);
-  const s = clampPaddle({ x: 10, y: 0.2, vx: 0, vy: 0 }, 1);
+  const s = clampPaddle({ x: 10, y: 0.2, z: 5, vx: 0, vy: 0, vz: 0 }, 1);
   assert.equal(s.x, -PADDLE_ZONE.xMin);
-  const inside = clampPaddle({ x: 1.5, y: 0.2, vx: 0, vy: 0 }, 1);
+  assert.equal(s.z, PADDLE_ZONE.zMax);
+  const inside = clampPaddle({ x: 1.5, y: 0.2, z: -0.4, vx: 0, vy: 0, vz: 0 }, 1);
   assert.equal(inside.x, 1.5);
+  assert.equal(inside.z, -0.4);
+  // raquete antiga sem z ganha z=0
+  assert.equal(clampPaddle({ x: -1.5, y: 0.2, vx: 0, vy: 0 }, -1).z, 0);
 });
 
-test('movePaddle: aceleração suave até a velocidade máxima, dentro da zona', () => {
+test('movePaddle: coordenadas de mundo (x, z), aceleração suave, não mexe em y', () => {
   for (const side of [-1, 1]) {
-    const p = { x: side * 1.8, y: 0.3, vx: 0, vy: 0 };
+    const p = { x: side * 1.8, y: 0.3, z: 0, vx: 0, vy: 0, vz: 0 };
     movePaddle(p, side, 1, 0, DT);
     assert.ok(p.vx > 0 && p.vx < PADDLE_MAX_SPEED * 0.5, 'começa devagar');
+    assert.equal(p.vz, 0);
     for (let i = 0; i < 60; i++) movePaddle(p, side, 1, 0, DT);
     assert.ok(p.vx <= PADDLE_MAX_SPEED + 1e-9);
-    // anda para a direita até o limite da zona
+    assert.equal(p.y, 0.3, 'y intacto');
+    // anda para +x e +z até o limite da zona
     for (let i = 0; i < 600; i++) movePaddle(p, side, 1, 1, DT);
     const xMax = side === -1 ? PADDLE_ZONE.xMax : -PADDLE_ZONE.xMin;
     assert.ok(Math.abs(p.x - xMax) < 1e-9);
-    assert.ok(Math.abs(p.y - PADDLE_ZONE.yMax) < 1e-9);
+    assert.ok(Math.abs(p.z - PADDLE_ZONE.zMax) < 1e-9);
+    assert.equal(p.y, 0.3, 'y intacto');
+    // -z
+    const m = { x: side * 1.8, y: 0.3, z: 0, vx: 0, vy: 0, vz: 0 };
+    for (let i = 0; i < 30; i++) movePaddle(m, side, 0, -1, DT);
+    assert.ok(m.z < -0.1 && m.vz < 0);
+    assert.ok(Math.abs(m.x - side * 1.8) < 1e-9);
     // diagonal não excede a velocidade máxima
-    const d = { x: side * 1.8, y: 0.3, vx: 0, vy: 0 };
+    const d = { x: side * 1.8, y: 0.3, z: 0, vx: 0, vy: 0, vz: 0 };
     for (let i = 0; i < 40; i++) {
       movePaddle(d, side, -1, -1, DT);
-      assert.ok(Math.hypot(d.vx, d.vy) <= PADDLE_MAX_SPEED + 1e-9);
+      assert.ok(Math.hypot(d.vx, d.vz) <= PADDLE_MAX_SPEED + 1e-9);
     }
     // soltar o stick freia
     const sp = Math.abs(d.vx);
     assert.ok(sp > 1, 'estava em movimento');
     for (let i = 0; i < 30; i++) movePaddle(d, side, 0, 0, DT);
     assert.ok(Math.abs(d.vx) < sp * 0.2);
+    assert.ok(Math.abs(d.vz) < sp * 0.2);
+  }
+});
+
+test('trackPaddleHeight converge para a altura da bola que se aproxima', () => {
+  for (const side of [-1, 1]) {
+    // bola parada no ar (lançamento do saque)
+    const p = { x: side * 1.6, y: 0.25, z: 0, vx: 0, vy: 0, vz: 0 };
+    const still = { x: side * 1.6, y: 0.6, z: 0, vx: 0, vy: 0, vz: 0, spin: 0 };
+    for (let i = 0; i < 120; i++) trackPaddleHeight(p, still, side, DT);
+    assert.ok(Math.abs(p.y - 0.6) < 0.005, `parada: ${p.y}`);
+
+    // bola em voo vindo para o lado: acompanha y durante o voo
+    const b = { x: -side * 1.2, y: 0.3, z: 0, vx: side * 6, vy: 1.5, vz: 0, spin: 0 };
+    const q = { x: side * 1.6, y: 0.25, z: 0, vx: 0, vy: 0, vz: 0 };
+    let maxErr = 0;
+    for (let i = 0; i < 100; i++) {
+      stepBall(b, DT);
+      trackPaddleHeight(q, b, side, DT);
+      if (i > 40) maxErr = Math.max(maxErr, Math.abs(q.y - b.y));
+    }
+    assert.ok(b.vx * side > 0);
+    assert.ok(maxErr < 0.03, `erro de rastreamento ${maxErr}`);
+
+    // limitada à zona
+    const high = { x: 0, y: 3, z: 0, vx: side * 3, vy: 0, vz: 0, spin: 0 };
+    for (let i = 0; i < 240; i++) trackPaddleHeight(q, high, side, DT);
+    assert.ok(Math.abs(q.y - PADDLE_ZONE.yMax) < 1e-9);
+
+    // bola indo embora: volta para a altura de espera
+    const away = { x: 0, y: 0.8, z: 0, vx: -side * 5, vy: 0, vz: 0, spin: 0 };
+    for (let i = 0; i < 480; i++) trackPaddleHeight(q, away, side, DT);
+    assert.ok(Math.abs(q.y - PADDLE_WAIT_Y) < 0.01, `espera ${q.y}`);
+    // sem bola / bola morta também volta para a espera, sem mexer em x/z
+    const r = { x: side * 1.6, y: 0.9, z: 0.3, vx: 0, vy: 0, vz: 0 };
+    for (let i = 0; i < 480; i++) trackPaddleHeight(r, { x: 0, y: 0, vx: 0, vy: 0, dead: true }, side, DT);
+    assert.ok(Math.abs(r.y - PADDLE_WAIT_Y) < 0.01);
+    assert.equal(r.x, side * 1.6);
+    assert.equal(r.z, 0.3);
   }
 });
