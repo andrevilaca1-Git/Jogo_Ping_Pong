@@ -1,6 +1,6 @@
 // Regras oficiais ITTF (singles): placar, saque, troca de lados e árbitro do rally.
 // Sem DOM; roda no Node para testes. Sintaxe compatível com navegadores antigos de TV.
-import { TABLE_HALF, SIDE_LEFT, SIDE_RIGHT } from './constants.js';
+import { TABLE_HALF, TABLE_W_HALF, SIDE_LEFT, SIDE_RIGHT } from './constants.js';
 
 export const REASON_TEXT = {
   SERVE_FAULT: 'Falta de saque',
@@ -177,6 +177,13 @@ function finishLet(rally) {
   return rally.result;
 }
 
+// Bola sobre o tampo da mesa (projeção em x e z); z ausente = 0 (eventos antigos 2D).
+function overTable(event) {
+  const x = event.x || 0;
+  const z = event.z || 0;
+  return Math.abs(x) <= TABLE_HALF && Math.abs(z) <= TABLE_W_HALF;
+}
+
 function registerHit(rally, player) {
   rally.lastHitter = player;
   rally.hits += 1;
@@ -232,7 +239,7 @@ function refereeServe(rally, event) {
   if (event.type === 'hit') {
     if (event.player === server) return finish(rally, receiver, 'DOUBLE_HIT');
     // Recebedor rebateu antes da bola quicar no seu lado.
-    if (Math.abs(event.x) > TABLE_HALF) return finish(rally, receiver, failReason);
+    if (!overTable(event)) return finish(rally, receiver, failReason);
     if (rally.ownBounces === 0) return finish(rally, receiver, 'SERVE_FAULT');
     // Saque que tocou a rede e seria bom: obstrução num let continua sendo let.
     if (rally.netTouched) return finishLet(rally);
@@ -256,7 +263,7 @@ function refereeRally(rally, event) {
       return null;
     }
     // Voleio: rebateu antes de a bola quicar no seu lado.
-    if (Math.abs(event.x) <= TABLE_HALF) return finish(rally, hitter, 'OBSTRUCTION');
+    if (overTable(event)) return finish(rally, hitter, 'OBSTRUCTION');
     return finish(rally, opp, 'OUT');
   }
   if (event.type === 'net') {
