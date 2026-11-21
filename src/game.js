@@ -33,7 +33,7 @@ function emptyInput() {
   };
 }
 const NO_INPUT = emptyInput();
-const NO_MENU = { up: false, down: false, left: false, right: false, confirm: false, back: false };
+const NO_MENU = { up: false, down: false, left: false, right: false, confirm: false, back: false, systemBack: false };
 
 function noop() {}
 
@@ -652,7 +652,9 @@ export function updateGame(game, dt, inputs, menuInput) {
   if (game.screen === 'title') {
     updateTitle(game, menu);
   } else if (game.screen === 'playing') {
-    if (anyPausePressed(game, inputs) || menu.back) {
+    // Durante a partida o botão B é golpe (chop): só "voltar" de teclado/remoto/VIEW pausa.
+    const backPause = menu.systemBack !== undefined ? !!menu.systemBack : !!menu.back;
+    if (anyPausePressed(game, inputs) || backPause) {
       pauseGame(game);
       return game;
     }

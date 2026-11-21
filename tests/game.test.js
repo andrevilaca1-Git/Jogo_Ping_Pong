@@ -290,3 +290,16 @@ test('pausa congela o estado', function () {
   press(game, 'confirm');
   assert.equal(game.screen, 'title');
 });
+
+test('regressão: B do controle (chop) não pausa a partida; voltar do remoto/VIEW pausa', () => {
+  const game = createGame({ audio: silentAudio(), rng: mulberry32(7) });
+  startMatch(game, { mode: '2p', bestOf: 3, firstServer: 0 });
+  // B do gamepad gera menu.back mas não systemBack
+  updateGame(game, DT, [idle(), idle()], menu({ back: true, systemBack: false }));
+  assert.equal(game.screen, 'playing');
+  updateGame(game, DT, [idle(), idle()], menu({ back: true, systemBack: true }));
+  assert.equal(game.screen, 'paused');
+  // na pausa, B (back) retoma
+  updateGame(game, DT, [idle(), idle()], menu({ back: true, systemBack: false }));
+  assert.equal(game.screen, 'playing');
+});

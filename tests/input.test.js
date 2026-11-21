@@ -299,3 +299,25 @@ test('sem keyTarget e sem gamepads: não quebra', () => {
   const mgr2 = createInputManager({ getGamepads: () => { throw new Error('x'); } });
   assert.doesNotThrow(() => mgr2.poll(0));
 });
+
+test('regressão: B do controle é back no menu mas não systemBack; VIEW e Voltar do remoto são systemBack', () => {
+  const a = makePad(0);
+  const { mgr, kt } = setup([a]);
+  mgr.poll(0);
+  press(a, XBOX.B);
+  let m = mgr.poll(16).menu;
+  assert.equal(m.back, true);
+  assert.equal(m.systemBack, false);
+  press(a, XBOX.B, false);
+  mgr.poll(32);
+  press(a, XBOX.VIEW);
+  m = mgr.poll(48).menu;
+  assert.equal(m.back, true);
+  assert.equal(m.systemBack, true);
+  press(a, XBOX.VIEW, false);
+  mgr.poll(64);
+  kt.down(undefined, 10009);
+  m = mgr.poll(80).menu;
+  assert.equal(m.back, true);
+  assert.equal(m.systemBack, true);
+});

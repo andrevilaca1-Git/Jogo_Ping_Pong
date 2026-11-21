@@ -34,7 +34,7 @@ function exitApp() {
   } catch (e) { /* fora do Tizen */ }
 }
 
-const NO_EDGES_MENU = { up: false, down: false, left: false, right: false, confirm: false, back: false };
+const NO_EDGES_MENU = { up: false, down: false, left: false, right: false, confirm: false, back: false, systemBack: false };
 
 function stripEdges(p) {
   if (!p) return null;

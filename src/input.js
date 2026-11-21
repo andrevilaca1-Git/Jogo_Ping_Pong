@@ -93,7 +93,8 @@ function readPad(pad) {
     smash: buttonValue(pad, XBOX.RT) > TRIGGER_THRESHOLD,
     pause: buttonPressed(pad, XBOX.MENU),
     confirm: buttonPressed(pad, XBOX.A),
-    back: buttonPressed(pad, XBOX.B) || buttonPressed(pad, XBOX.VIEW)
+    back: buttonPressed(pad, XBOX.B) || buttonPressed(pad, XBOX.VIEW),
+    view: buttonPressed(pad, XBOX.VIEW)
   };
   return st;
 }
@@ -101,7 +102,7 @@ function readPad(pad) {
 function emptyPadState() {
   return { lx: 0, ly: 0, rx: 0, ry: 0, rawLx: 0, rawLy: 0, up: false, down: false, left: false,
     right: false, drive: false, chop: false, topspin: false, smash: false, pause: false,
-    confirm: false, back: false };
+    confirm: false, back: false, view: false };
 }
 
 function pickShot(flags) {
@@ -271,7 +272,10 @@ export function createInputManager(opts) {
       states[pads[i].index] = readPad(pads[i].pad);
     }
 
-    const menu = { up: false, down: false, left: false, right: false, confirm: false, back: false };
+    // systemBack: "voltar" que NÃO vem do botão B (B é golpe chop durante a partida):
+    // teclado/remoto (Esc, Backspace, Voltar 10009) ou botão VIEW do controle.
+    const menu = { up: false, down: false, left: false, right: false, confirm: false, back: false,
+      systemBack: false };
 
     // Agrega todos os gamepads conectados no menu.
     for (let i = 0; i < pads.length; i++) {
@@ -280,12 +284,14 @@ export function createInputManager(opts) {
       const prev = prevPad[idx] || st; // 1ª leitura: sem borda falsa
       if (st.confirm && !prev.confirm) menu.confirm = true;
       if (st.back && !prev.back) menu.back = true;
+      if (st.view && !prev.view) menu.systemBack = true;
       processMenuDir(idx, 'up', st.up || st.rawLy > MENU_STICK_THRESHOLD, now, menu);
       processMenuDir(idx, 'down', st.down || st.rawLy < -MENU_STICK_THRESHOLD, now, menu);
       processMenuDir(idx, 'left', st.left || st.rawLx < -MENU_STICK_THRESHOLD, now, menu);
       processMenuDir(idx, 'right', st.right || st.rawLx > MENU_STICK_THRESHOLD, now, menu);
     }
     for (const k in menuKeyEdges) if (menuKeyEdges[k]) menu[k] = true;
+    if (menuKeyEdges.back) menu.systemBack = true;
 
     const players = [];
     for (let p = 0; p < 2; p++) {
