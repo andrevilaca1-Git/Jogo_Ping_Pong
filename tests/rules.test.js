@@ -24,7 +24,8 @@ function play(rally, events) {
   }
   return { result: last, index: -1 };
 }
-const hit = (player, x, y) => ({ type: 'hit', player: player, x: x, y: y === undefined ? 0.3 : y });
+const hit = (player, x, y, z) => ({ type: 'hit', player: player, x: x, y: y === undefined ? 0.3 : y, z: z === undefined ? 0 : z });
+const hit2d = (player, x) => ({ type: 'hit', player: player, x: x, y: 0.3 });
 const bounce = (side, x) => ({ type: 'bounce', side: side, x: x === undefined ? side * 0.7 : x });
 const net = (clip) => ({ type: 'net', clip: !!clip });
 const floor = (x) => ({ type: 'floor', x: x });
@@ -615,6 +616,38 @@ describe('árbitro: rally', () => {
   test('voleio além da linha de fundo = bola era fora, ponto de quem rebateu', () => {
     const r = servedRally();
     assert.deepEqual(play(r, [hit(1, 1.5), hit(0, -1.5)]).result, { winner: 0, reason: 'OUT' });
+  });
+  test('3D: voleio sobre o tampo (z dentro da largura) = obstrução', () => {
+    for (const z of [-0.7625, -0.5, 0, 0.3, 0.7625]) {
+      const r = servedRally();
+      assert.deepEqual(play(r, [hit(1, 1.5), hit(0, -0.9, 0.3, z)]).result,
+        { winner: 1, reason: 'OBSTRUCTION' }, `z=${z}`);
+    }
+  });
+  test('3D: voleio ao lado da mesa (|z| > TABLE_W_HALF) = bola era fora, ponto de quem rebateu', () => {
+    for (const z of [-0.9, 0.78, 1.2]) {
+      const r = servedRally();
+      assert.deepEqual(play(r, [hit(1, 1.5), hit(0, -0.9, 0.3, z)]).result,
+        { winner: 0, reason: 'OUT' }, `z=${z}`);
+    }
+  });
+  test('3D: voleio na quina (|x| e |z| fora) = OUT', () => {
+    const r = servedRally();
+    assert.deepEqual(play(r, [hit(1, 1.5), hit(0, -1.5, 0.3, 0.9)]).result, { winner: 0, reason: 'OUT' });
+  });
+  test('3D: evento hit sem z é tratado como z=0', () => {
+    const r = servedRally();
+    assert.deepEqual(play(r, [hit(1, 1.5), hit2d(0, -0.9)]).result, { winner: 1, reason: 'OBSTRUCTION' });
+    const r2 = servedRally();
+    assert.deepEqual(play(r2, [hit(1, 1.5), hit2d(0, -1.5)]).result, { winner: 0, reason: 'OUT' });
+  });
+  test('3D: recebedor volea o saque ao lado da mesa = ponto do recebedor', () => {
+    const r = rally0();
+    assert.deepEqual(play(r, [hit(0, -1.5), bounce(-1), hit(1, 0.8, 0.3, 0.95)]).result,
+      { winner: 1, reason: 'SERVE_FAULT' });
+    const r2 = rally0();
+    assert.deepEqual(play(r2, [hit(0, -1.5), bounce(-1), hit(1, 0.8, 0.3, -0.5)]).result,
+      { winner: 0, reason: 'OBSTRUCTION' });
   });
   test('voleio além da linha de fundo após rede', () => {
     const r = servedRally();
