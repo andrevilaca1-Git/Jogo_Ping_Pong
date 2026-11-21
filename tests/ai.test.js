@@ -54,21 +54,55 @@ function simulate(level, side, ballInit, seed) {
   return { reached, minDist, bouncedOwn, shotHeld, pressed };
 }
 
-// Bolas 3D variadas vindo do lado oposto: velocidades, alturas, vy, spin, z inicial e vz.
+// Lança uma bola do lado oposto para quicar em (side*landX, landZ) no lado da IA.
+// Bisseção em vy (para vx dado); vz calculado pelo tempo até o quique.
+function aimedBall(side, x0, y0, z0, vx, spin, landX, landZ) {
+  function fly(vy, vz) {
+    const b = { x: x0, y: y0, z: z0, vx: side * vx, vy, vz, spin };
+    let t = 0;
+    while (t < 2.5 && !b.dead) {
+      const ev = stepBall(b, 1 / 240);
+      t += 1 / 240;
+      for (const e of ev) {
+        if (e.type === 'net') return { d: -9, t };
+        if (e.type === 'bounce') return { d: e.x * side, t, z: e.z };
+        if (e.type === 'floor') return { d: e.x * side > 0 ? 9 : -9, t };
+      }
+    }
+    return { d: 9, t };
+  }
+  let lo = -4;
+  let hi = 4;
+  let r = null;
+  for (let it = 0; it < 40; it++) {
+    const mid = (lo + hi) / 2;
+    r = fly(mid, 0);
+    if (r.d < landX) lo = mid; else hi = mid;
+  }
+  const vy = (lo + hi) / 2;
+  const vz = (landZ - z0) / r.t;
+  return { x: x0, y: y0, z: z0, vx: side * vx, vy, vz, spin };
+}
+
+// Bolas 3D variadas vindo do lado oposto: velocidades, spin, z de saída, ponto de quique (x, z).
+const SCEN_CACHE = {};
 function scenarios(side) {
+  if (SCEN_CACHE[side]) return SCEN_CACHE[side];
   const list = [];
-  const speeds = [4.5, 6, 7.5];
-  const heights = [0.2, 0.4];
-  const vys = [-0.5, 1.0];
-  const zs = [-0.5, 0, 0.5];
-  const vzs = [-1.2, 0, 1.2];
+  const speeds = [4.5, 6, 7.5, 9];
   const spins = [-60, 0, 80];
+  const landXs = [0.45, 0.85, 1.2];
+  const landZs = [-0.65, -0.3, 0, 0.35, 0.68];
+  const z0s = [-0.6, 0, 0.6];
   let i = 0;
-  for (const vx of speeds) for (const y of heights) for (const vy of vys) for (const z of zs) {
-    const vz = vzs[i % vzs.length];
-    list.push({ x: -side * 1.3, y, z, vx: side * vx, vy, vz: vz - z * 0.6, spin: spins[i % spins.length] });
+  for (const vx of speeds) for (const lx of landXs) for (let j = 0; j < 3; j++) {
+    const lz = landZs[(i * 2 + j) % landZs.length];
+    const z0 = z0s[(i + j) % z0s.length];
+    const y0 = 0.2 + 0.1 * ((i + j) % 3);
+    list.push(aimedBall(side, -side * 1.3, y0, z0, vx, spins[i % spins.length], lx, lz));
     i++;
   }
+  SCEN_CACHE[side] = list;
   return list;
 }
 
@@ -134,7 +168,7 @@ test('IA segue a bola em z: bola cruzada para a lateral leva a raquete para o me
   for (const side of [-1, 1]) {
     for (const zs of [-1, 1]) {
       const ai = createAI({ level: 'hard', rng: makeRng(11) });
-      const ball = { x: -side * 1.2, y: 0.3, z: -zs * 0.3, vx: side * 5, vy: 0.5, vz: zs * 1.6, spin: 0 };
+      const ball = aimedBall(side, -side * 1.2, 0.3, -zs * 0.3, 5, 0, 0.8, zs * 0.65);
       const paddle = { x: side * 1.7, y: 0.25, z: 0, vx: 0, vy: 0, vz: 0 };
       const dt = 1 / 60;
       let maxZ = 0;
@@ -201,7 +235,7 @@ test('mira: hard busca os cantos às vezes; easy é mais previsível; profundida
     for (const x of a) {
       if (Math.abs(x.lateral) >= 0.75) corner++;
       sumAbs += Math.abs(x.lateral);
-      if (x.depth > 0.25) deep++;
+      if (x.depth > 0.45) deep++;
     }
     return { n: a.length, corner: corner / a.length, meanAbs: sumAbs / a.length, deep: deep / a.length };
   }

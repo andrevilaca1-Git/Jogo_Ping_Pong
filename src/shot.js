@@ -1,6 +1,7 @@
-// Golpes e saques: calcula a velocidade de saída da bola após o contato com a raquete.
+// Golpes e saques (física 3D, contrato v2): calcula a velocidade de saída da bola após o
+// contato com a raquete. x = comprimento, y = altura, z = largura da mesa.
 import {
-  TABLE_HALF, NET_H, BALL_R, HIT_RADIUS, PHYSICS_DT
+  TABLE_HALF, NET_H, BALL_R, HIT_RADIUS, PHYSICS_DT, AIR_DRAG
 } from './constants.js';
 import { stepBall, copyBall } from './physics.js';
 
@@ -10,7 +11,7 @@ import { stepBall, copyBall } from './physics.js';
 // ajustar a trajetória; err: sensibilidade à dispersão; fastTol: tolerância a bola rápida.
 export var SHOT_PARAMS = {
   block:   { vx: 4.5,  spin: 15,   depth: 0.85, margin: 0.07, minVx: 2.8, err: 0.6, fastTol: 1.6 },
-  drive:   { vx: 7.0,  spin: 40,   depth: 0.95, margin: 0.05, minVx: 4.0, err: 1.0, fastTol: 1.0 },
+  drive:   { vx: 7.0,  spin: 40,   depth: 0.95, margin: 0.05, minVx: 4.0, err: 0.85, fastTol: 1.0 },
   topspin: { vx: 8.0,  spin: 120,  depth: 1.00, margin: 0.06, minVx: 4.5, err: 0.85, fastTol: 1.1 },
   chop:    { vx: 4.5,  spin: -100, depth: 0.90, margin: 0.035, minVx: 3.0, err: 0.85, fastTol: 1.2 },
   smash:   { vx: 12.5, spin: 25,   depth: 0.95, margin: 0.025, minVx: 9.0, err: 1.3, fastTol: 0.8 }
@@ -27,7 +28,9 @@ export var SERVE_PARAMS = {
 
 var MIN_DEPTH = 0.35;
 var MAX_DEPTH = 1.25;
-var AIM_DEPTH = 0.3;          // quanto aim.x muda a profundidade
+var AIM_DEPTH = 0.3;          // quanto aim.depth muda a profundidade
+var AIM_LATERAL = 0.55;       // z do alvo de quique = aim.lateral * 0.55 (dentro da mesa)
+var SERVE_START_Z = 0.7;      // |z| máximo de onde o saque sai (para o 1º quique cair na mesa)
 var PADDLE_POWER = 0.3;       // fração da velocidade da raquete que vira força extra
 var PADDLE_POWER_MAX = 1.5;   // m/s
 var SWEET_SPOT = 0.7;         // fração de HIT_RADIUS sem penalidade de contato
@@ -36,6 +39,7 @@ var SMASH_HIGH_Y = 0.25;      // abaixo disto o smash fica arriscado
 var DISPERSION_VY = 1.1;      // m/s por unidade de erro
 var DISPERSION_VX = 0.10;     // fração por unidade de erro
 var DISPERSION_SPIN = 30;     // rad/s por unidade de erro
+var DISPERSION_VZ = 0.5;      // m/s por unidade de erro
 var SERVE_FAULT_CHANCE = 0.025;
 var SERVE_NET_MARGIN = 0.03;   // folga mínima do saque sobre a rede (m)
 var SERVE_ROBUST_DVY = 0.08;  // vizinhança de vy que também precisa ser válida
@@ -53,22 +57,41 @@ function gauss(rng) {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-function paramsFor(table, type) {
-  return table[type] || table.drive;
+// Mira normalizada { lateral (+z), depth (+1 = mais fundo) }, ambos em -1..1.
+// Compatibilidade: formato antigo { x, y } (x de tela/mundo em direção ao oponente = mais fundo,
+// ou seja depth = x * dir; y ignorado).
+export function normalizeAim(aim, dir) {
+  if (!aim) return { lateral: 0, depth: 0 };
+  if (aim.lateral !== undefined || aim.depth !== undefined) {
+    return { lateral: clamp(aim.lateral || 0, -1, 1), depth: clamp(aim.depth || 0, -1, 1) };
+  }
+  return { lateral: 0, depth: clamp((aim.x || 0) * dir, -1, 1) };
+}
+
+// vz que leva a bola de z0 até zT em t segundos, com arrasto linear (Magnus não atua em z).
+function vzFor(z0, zT, t) {
+  if (!(t > 1e-3)) return 0;
+  var f = (1 - Math.exp(-AIR_DRAG * t)) / AIR_DRAG;
+  return (zT - z0) / f;
+}
+
+function dist3(ball, paddle) {
+  var dx = ball.x - paddle.x;
+  var dy = ball.y - paddle.y;
+  var dz = (ball.z || 0) - (paddle.z || 0);
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 export function canHit(ball, paddle, side) {
   if (!ball || !paddle || ball.dead) return false;
-  var dx = ball.x - paddle.x;
-  var dy = ball.y - paddle.y;
-  if (dx * dx + dy * dy > HIT_RADIUS * HIT_RADIUS) return false;
+  if (dist3(ball, paddle) > HIT_RADIUS) return false;
   return ball.vx * side > 0 || Math.abs(ball.vx) < 0.5;
 }
 
-// Simula o voo até o primeiro evento. Retorna {dist, netY, ok} onde dist é a distância
-// (ao longo de dir) do quique; netY é a altura do centro ao cruzar x=0 (ou -1).
+// Simula o voo (plano x-y, z=0) até o primeiro evento. Retorna {dist, netY, kind, t} onde dist é
+// a distância (ao longo de dir) do quique; netY é a altura do centro ao cruzar x=0 (ou -1).
 function flyToFirstBounce(x, y, vx, vy, spin, dir) {
-  var b = { x: x, y: y, vx: vx, vy: vy, spin: spin };
+  var b = { x: x, y: y, z: 0, vx: vx, vy: vy, vz: 0, spin: spin };
   var netY = -1;
   var t = 0;
   while (t < SIM_MAX_T) {
@@ -82,14 +105,14 @@ function flyToFirstBounce(x, y, vx, vy, spin, dir) {
     }
     for (var i = 0; i < ev.length; i++) {
       var e = ev[i];
-      if (e.type === 'net') return { dist: -0.5, netY: netY, kind: 'net' };
-      if (e.type === 'bounce') return { dist: e.x * dir, netY: netY, kind: 'bounce' };
+      if (e.type === 'net') return { dist: -0.5, netY: netY, kind: 'net', t: t };
+      if (e.type === 'bounce') return { dist: e.x * dir, netY: netY, kind: 'bounce', t: t };
       if (e.type === 'floor') {
-        return { dist: e.x * dir > TABLE_HALF ? 10 : -10, netY: netY, kind: 'floor' };
+        return { dist: e.x * dir > TABLE_HALF ? 10 : -10, netY: netY, kind: 'floor', t: t };
       }
     }
   }
-  return { dist: 10, netY: netY, kind: 'timeout' };
+  return { dist: 10, netY: netY, kind: 'timeout', t: t };
 }
 
 // Bisseção em vy para que o primeiro quique caia em `target` (distância ao longo de dir).
@@ -108,12 +131,11 @@ function solveVy(x, y, vx, spin, dir, target) {
 }
 
 function contactQuality(ball, paddle, shotType, p) {
-  var dx = ball.x - paddle.x;
-  var dy = ball.y - paddle.y;
-  var d = Math.sqrt(dx * dx + dy * dy) / HIT_RADIUS;
+  var d = dist3(ball, paddle) / HIT_RADIUS;
   var off = clamp((d - SWEET_SPOT) / (1 - SWEET_SPOT), 0, 1.2);
   var q = 1 - EDGE_PENALTY * Math.pow(off, 1.3);
-  var inSpeed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+  var bvz = ball.vz || 0;
+  var inSpeed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy + bvz * bvz);
   if (inSpeed > 7) q -= (inSpeed - 7) * 0.04 / p.fastTol;
   var inSpin = Math.abs(ball.spin || 0);
   if (inSpin > 60) q -= (inSpin - 60) * 0.002 / p.fastTol;
@@ -126,17 +148,16 @@ export function computeShot(opts) {
   var paddle = opts.paddle;
   var side = opts.side;
   var shotType = SHOT_PARAMS[opts.shotType] ? opts.shotType : 'drive';
-  var aim = opts.aim || { x: 0, y: 0 };
   var rng = opts.rng || Math.random;
   var p = SHOT_PARAMS[shotType];
   var dir = -side;
+  var aim = normalizeAim(opts.aim, dir);
 
-  var ax = clamp(aim.x || 0, -1, 1);
-  var ay = clamp(aim.y || 0, -1, 1);
-  var depth = clamp(p.depth + ax * dir * AIM_DEPTH, MIN_DEPTH, MAX_DEPTH - 0.05);
+  var depth = clamp(p.depth + aim.depth * AIM_DEPTH, MIN_DEPTH, MAX_DEPTH - 0.05);
+  var zTarget = aim.lateral * AIM_LATERAL;
 
   var power = clamp((paddle.vx || 0) * dir * PADDLE_POWER, 0, PADDLE_POWER_MAX);
-  var vx = p.vx * (1 - 0.1 * ay) + power;
+  var vx = p.vx + power;
   var spin = p.spin;
 
   var quality = contactQuality(ball, paddle, shotType, p);
@@ -155,7 +176,7 @@ export function computeShot(opts) {
     var score = (landOk ? 0 : -1) + Math.min(clear, 0) * 5;
     if (score > bestScore) {
       bestScore = score;
-      chosen = { vx: curVx * dir, vy: s.vy };
+      chosen = { vx: curVx * dir, vy: s.vy, t: r.t };
     }
     if (landOk && clear >= 0) break;
     if (attempt % 2 === 0 && curDepth < MAX_DEPTH - 0.05) {
@@ -170,18 +191,24 @@ export function computeShot(opts) {
   var g1 = gauss(rng);
   var g2 = gauss(rng);
   var g3 = gauss(rng);
+  var g4 = gauss(rng);
   var outVx = chosen.vx * (1 + g1 * DISPERSION_VX * err);
   var outVy = chosen.vy + g2 * DISPERSION_VY * err;
   var outSpin = spin + g3 * DISPERSION_SPIN * err;
+  var vz = vzFor(ball.z || 0, zTarget, chosen.t);
+  var outVz = vz + g4 * DISPERSION_VZ * err;
 
-  return { vx: outVx, vy: outVy, spin: outSpin, quality: quality, type: shotType };
+  return { vx: outVx, vy: outVy, vz: outVz, spin: outSpin, quality: quality, type: shotType };
 }
 
-// Simula um saque; retorna {bounces, net, dead, netY}.
+// Simula um saque; retorna {bounces, net, dead, netY, events, times}.
+// bounces = posições ao longo de dir; events = eventos de quique (com z); times = instantes.
 function simulateServe(start, side) {
   var b = copyBall(start);
   var dir = -side;
   var bounces = [];
+  var events = [];
+  var times = [];
   var net = false;
   var netY = -1;
   var t = 0;
@@ -194,17 +221,17 @@ function simulateServe(start, side) {
       netY = py + (b.y - py) * (px / (px - b.x));
     }
     for (var i = 0; i < ev.length; i++) {
-      if (ev[i].type === 'bounce') bounces.push(ev[i].x * dir);
+      if (ev[i].type === 'bounce') { bounces.push(ev[i].x * dir); events.push(ev[i]); times.push(t); }
       else if (ev[i].type === 'net') net = true;
       else if (ev[i].type === 'floor') b.dead = true;
     }
   }
-  return { bounces: bounces, net: net, dead: b.dead, netY: netY };
+  return { bounces: bounces, net: net, dead: b.dead, netY: netY, events: events, times: times };
 }
 
 // Distância (ao longo de dir) do 2º quique, com categorias monótonas para bisseção.
 function serveMetric(x, y, vx, vy, spin, side) {
-  var r = simulateServe({ x: x, y: y, vx: vx, vy: vy, spin: spin }, side);
+  var r = simulateServe({ x: x, y: y, z: 0, vx: vx, vy: vy, vz: 0, spin: spin }, side);
   if (r.bounces.length === 0) return { d: r.dead ? -20 : 20, r: r };
   if (r.bounces[0] > 0) return { d: 20, r: r };          // 1º quique já no lado do recebedor
   if (r.net || r.netY < NET_H + BALL_R + SERVE_NET_MARGIN) return { d: -5, r: r };
@@ -240,20 +267,41 @@ function robustServeScore(x, y, vx, vy, spin, side, depth) {
   return s0;
 }
 
+function serveZAt2nd(x, y, z, vx, vy, vz, spin, side) {
+  var r = simulateServe({ x: x, y: y, z: z, vx: vx, vy: vy, vz: vz, spin: spin }, side);
+  if (r.events.length < 2) return null;
+  return r.events[1].z;
+}
+
+function solveServeVz(x, y, z, vx, vy, spin, side, zTarget) {
+  var r0 = simulateServe({ x: x, y: y, z: 0, vx: vx, vy: vy, vz: 0, spin: spin }, side);
+  var t2 = r0.times.length >= 2 ? r0.times[1] : 0.6;
+  var vz = vzFor(z, zTarget, t2);
+  for (var it = 0; it < 3; it++) {
+    var zz = serveZAt2nd(x, y, z, vx, vy, vz, spin, side);
+    if (zz === null) break;
+    var errZ = zTarget - zz;
+    if (Math.abs(errZ) < 0.005) break;
+    vz += errZ / ((1 - Math.exp(-AIR_DRAG * t2)) / AIR_DRAG);
+  }
+  return vz;
+}
+
 export function computeServe(opts) {
   var side = opts.side;
-  var paddle = opts.paddle || { x: side * 1.6, y: 0.25 };
+  var paddle = opts.paddle || { x: side * 1.6, y: 0.25, z: 0 };
   var type = SERVE_PARAMS[opts.shotType] ? opts.shotType : 'drive';
-  var aim = opts.aim || { x: 0, y: 0 };
   var rng = opts.rng || Math.random;
   var p = SERVE_PARAMS[type];
   var dir = -side;
+  var aim = normalizeAim(opts.aim, dir);
 
   // A bola sai da raquete, atrás da linha de fundo do sacador (altura mínima = lançamento).
   var x = side * Math.max(Math.abs(paddle.x), TABLE_HALF + 0.04);
   var y = clamp(paddle.y, SERVE_MIN_Y, SERVE_MAX_Y);
-  var ax = clamp(aim.x || 0, -1, 1);
-  var depth = clamp(p.depth + ax * dir * AIM_DEPTH, 0.4, 1.2);
+  var z = clamp(paddle.z || 0, -SERVE_START_Z, SERVE_START_Z);
+  var depth = clamp(p.depth + aim.depth * AIM_DEPTH, 0.4, 1.2);
+  var zTarget = aim.lateral * AIM_LATERAL;
   var spin = p.spin;
 
   // Busca: para alguns vx candidatos, varredura em vy + refinamento local (a relação vy -> 2º
@@ -284,11 +332,16 @@ export function computeServe(opts) {
   }
   var chosen = best || { vx: p.vx * dir, vy: -1.0 };
 
+  // Direção lateral: vz para o 2º quique cair em zTarget (o quique com spin altera um pouco vz,
+  // então refina com a simulação 3D completa).
+  var vz = solveServeVz(x, y, z, chosen.vx, chosen.vy, spin, side, zTarget);
+
   // Pequena variação natural e pequena chance de erro.
   var jitter = gauss(rng);
   var faultRoll = rng();
   var faultDir = rng() < 0.5 ? -1 : 1;
   var vyOut = chosen.vy + jitter * 0.03;
   if (faultRoll < SERVE_FAULT_CHANCE) vyOut += faultDir * (0.7 + 0.5 * rng());
-  return { x: x, y: y, vx: chosen.vx, vy: vyOut, spin: spin };
+  var vzOut = vz + gauss(rng) * 0.03;
+  return { x: x, y: y, z: z, vx: chosen.vx, vy: vyOut, vz: vzOut, spin: spin };
 }

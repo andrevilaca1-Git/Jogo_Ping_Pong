@@ -241,6 +241,19 @@ function chooseShot(ai, ball, contactY) {
   return shot === 'block' ? null : shot;
 }
 
+// O jogo usa o stick direito (aimX/aimY) só se |aim| > 0.3; senão usa o stick esquerdo
+// (movimento). Para que a mira escolhida valha sempre, completa a magnitude com profundidade.
+const AIM_MIN_MAG = 0.32;
+function aimOutput(lateral, depth, side) {
+  const lat = clamp(lateral, -1, 1);
+  let dep = clamp(depth, -1, 1);
+  if (lat * lat + dep * dep < AIM_MIN_MAG * AIM_MIN_MAG) {
+    const need = Math.sqrt(AIM_MIN_MAG * AIM_MIN_MAG - lat * lat);
+    dep = dep < -0.05 ? -need : need;
+  }
+  return { aimX: lat, aimY: clamp(dep * -side, -1, 1) };
+}
+
 function newPlan(ai, ball, paddle, side, opponent) {
   const p = ai.params;
   const rng = ai.rng;
@@ -255,11 +268,10 @@ function newPlan(ai, ball, paddle, side, opponent) {
   }
   const shot = chooseShot(ai, ball, hit.y);
   const aim = chooseAim(ai, hit.z, opponent);
+  const o = aimOutput(aim.lateral, aim.depth, side);
   return {
     letGo: false, x: hit.x, y: hit.y, z: hit.z, t: hit.t,
-    errX: errX, errZ: errZ, shot: shot,
-    aimX: aim.lateral,
-    aimY: clamp(aim.depth * -side, -1, 1)
+    errX: errX, errZ: errZ, shot: shot, aimX: o.aimX, aimY: o.aimY
   };
 }
 
@@ -317,7 +329,7 @@ export function updateAI(ai, state) {
         ai.serveType = p.serveTypes[Math.floor(rng() * p.serveTypes.length)];
         const lat = (rng() * 2 - 1) * p.serveLateral;
         const dep = rng() * 0.6 - 0.2;
-        ai.serveAim = { aimX: clamp(lat, -1, 1), aimY: clamp(dep * -side, -1, 1) };
+        ai.serveAim = aimOutput(lat, dep, side);
       }
       steer(out, paddle, ai.serveTarget, 0.6);
       ai.serveTimer += dt;
