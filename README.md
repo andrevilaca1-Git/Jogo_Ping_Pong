@@ -16,8 +16,12 @@ Repita para o 2º controle. O **primeiro controle conectado é o Jogador 1** (ra
 ### 2. Abra o jogo — escolha uma opção
 
 **Opção A — Navegador da TV (mais simples)**
-1. No GitHub do repositório: *Settings → Pages → Source: GitHub Actions*, e faça merge na `main`.
-   O workflow `.github/workflows/pages.yml` roda os testes e publica automaticamente.
+1. Faça merge na `main`: o workflow `.github/workflows/pages.yml` roda os testes, gera o build
+   e publica no branch `gh-pages`.
+   Depois, uma única vez: *Settings → Pages → Build and deployment → Source: Deploy from a branch*,
+   escolha **gh-pages** / **(root)** e salve.
+   (GitHub Pages em repositório **privado** exige plano GitHub Pro/Team; no plano gratuito o
+   repositório precisa ser público.)
 2. Na TV, abra o app **Internet** e acesse `https://<seu-usuario>.github.io/Jogo_Ping_Pong/`.
 3. Aperte qualquer botão do controle para ele ser reconhecido.
 
