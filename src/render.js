@@ -976,10 +976,12 @@ export function createRenderer(canvas, opts) {
     grad.addColorStop(1, '#ffc36b');
     ctx.fillStyle = grad;
     ctx.fillText('PING PONG', VIEW_W / 2, 190 + wob);
-    fillRound(ctx, VIEW_W / 2 + 330, 110 + wob, 120, 70, 16, COLORS.p1);
+    const titleW = ctx.measureText('PING PONG').width;
+    const badgeX = VIEW_W / 2 + titleW / 2 + 24;
+    fillRound(ctx, badgeX, 112 + wob, 120, 70, 16, COLORS.p1);
     ctx.font = font(52, '900');
     ctx.fillStyle = '#fff';
-    ctx.fillText('TV', VIEW_W / 2 + 390, 147 + wob);
+    ctx.fillText('TV', badgeX + 60, 149 + wob);
     ctx.font = font(36, '600');
     ctx.fillStyle = COLORS.dim;
     ctx.fillText('Tênis de mesa no sofá · 1 ou 2 jogadores', VIEW_W / 2, 290);
@@ -1085,7 +1087,7 @@ export function createRenderer(canvas, opts) {
     ctx.fillStyle = COLORS.gold;
     ctx.fillText('Como jogar', x0 + 50, y0 + 56);
 
-    drawXboxController(x0 + 330, y0 + 330, 1.05);
+    drawXboxController(x0 + 330, y0 + 300, 0.95);
 
     const rows = [
       ['LS / D-pad', 'Mover a raquete'],
@@ -1098,7 +1100,7 @@ export function createRenderer(canvas, opts) {
       ['MENU', 'Pausar']
     ];
     const colX = x0 + 700;
-    let y = y0 + 130;
+    let y = y0 + 120;
     for (let i = 0; i < rows.length; i++) {
       const key = rows[i][0];
       let color = '#3a4152';
@@ -1115,17 +1117,17 @@ export function createRenderer(canvas, opts) {
       ctx.textAlign = 'left';
       ctx.font = font(34, '600');
       ctx.fillStyle = COLORS.text;
-      ctx.fillText(rows[i][1], colX + 190, y + 1);
-      y += 58;
+      ctx.fillText(rows[i][1], colX + 230, y + 1);
+      y += 52;
     }
     // teclado
     ctx.font = font(28, '700');
     ctx.fillStyle = COLORS.gold;
-    ctx.fillText('Teclado', x0 + 60, y0 + 520);
+    ctx.fillText('Teclado', x0 + 60, y0 + 530);
     ctx.font = font(28, '600');
     ctx.fillStyle = COLORS.text;
-    ctx.fillText('J1: WASD mover · F drive · G topspin · H corte · T smash · Esc pausa', x0 + 60, y0 + 562);
-    ctx.fillText('J2: Setas mover · K drive · L topspin · J corte · I smash · P pausa', x0 + 60, y0 + 600);
+    ctx.fillText('J1: WASD mover · F drive · G topspin · H corte · T smash · Esc pausa', x0 + 60, y0 + 570);
+    ctx.fillText('J2: Setas mover · K drive · L topspin · J corte · I smash · P pausa', x0 + 60, y0 + 606);
     ctx.textAlign = 'right';
     ctx.fillStyle = COLORS.dim;
     ctx.fillText('Segure o golpe antes da bola chegar.  A / B: voltar', x0 + W - 50, y0 + 56);
@@ -1262,12 +1264,14 @@ export function createRenderer(canvas, opts) {
       drawTitle(game);
       return;
     }
-    drawScoreboard(game);
+    if (game.screen !== 'matchOver') drawScoreboard(game);
     if (game.screen === 'playing' || game.screen === 'paused') {
-      if (game.phase === 'pointOver') drawPointBanner(game);
-      if (game.phase === 'gameOver') drawGameOverPanel(game);
-      drawServeHint(game);
-      drawSwapNotice(game);
+      if (game.screen === 'playing') {
+        if (game.phase === 'pointOver') drawPointBanner(game);
+        if (game.phase === 'gameOver') drawGameOverPanel(game);
+        drawServeHint(game);
+        drawSwapNotice(game);
+      }
       if (game.mode === 'cpu') {
         ctx.font = font(30, '800');
         ctx.textAlign = 'center';
